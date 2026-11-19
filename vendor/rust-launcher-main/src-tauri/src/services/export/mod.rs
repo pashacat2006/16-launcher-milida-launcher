@@ -1,0 +1,2133 @@
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use ignore::gitignore::GitignoreBuilder;
+use image::imageops::FilterType;
+use image::{DynamicImage, GenericImageView, ImageFormat, RgbaImage};
+use reqwest::header::USER_AGENT;
+use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
+use sha2::{Digest as Sha2Digest, Sha512};
+use tauri::{AppHandle, Emitter};
+use zip::write::SimpleFileOptions;
+
+use crate::app::paths::instance_dir_for_id;
+use crate::models::profile::InstanceConfig;
+use crate::services::game::cache;
+use crate::services::modrinth::client::{modrinth_http_client, MODRINTH_API_BASE};
+use crate::services::modrinth::types::{ModrinthVersion, ModrinthVersionFile, MODRINTH_USER_AGENT};
+
+const VERSION_FILES_BATCH: usize = 96;
+
+const BUILTIN_MRPACK_IGNORES: &[&str] = &[
+    "config.json",
+    "settings.json",
+    "logs/",
+    "crash-reports/",
+    ".cache/",
+    "cache/",
+    ".update-snapshots/",
+    "natives/",
+    "libraries/",
+    ".fabric/",
+    ".quilt/",
+    "*.log",
+];
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileNode {
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub children: Option<Vec<FileNode>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PreviewFile {
+    pub path: String,
+    pub size: u64,
+    pub source: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PreviewResult {
+    pub files: Vec<PreviewFile>,
+    pub total_bytes: u64,
+    pub download_bytes: u64,
+    pub resolved_count: u32,
+    pub override_count: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExportResult {
+    pub path: String,
+    pub skipped_files: Vec<String>,
+    pub resolved_count: u32,
+    pub override_count: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct VersionFilesRequest {
+    hashes: Vec<String>,
+    algorithm: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedMrpackFile {
+    path: String,
+    sha1: String,
+    sha512: String,
+    downloads: Vec<String>,
+    file_size: u64,
+}
+
+fn to_rel_slash(root: &Path, p: &Path) -> Result<String, String> {
+    Ok(p
+        .strip_prefix(root)
+        .map_err(|_| "Bad prefix")?
+        .to_str()
+        .ok_or_else(|| "Invalid UTF-8".to_string())?
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string())
+    .map(|s| if s.is_empty() { ".".into() } else { s })
+}
+
+fn build_ignore(root: &Path, patterns: &[String]) -> Result<ignore::gitignore::Gitignore, String> {
+    let mut b = GitignoreBuilder::new(root);
+    for p in patterns {
+        let p = p.trim();
+        if !p.is_empty() {
+            b.add_line(None, p).map_err(|e| e.to_string())?;
+        }
+    }
+    b.build().map_err(|e| e.to_string())
+}
+
+fn is_ignored(gi: &ignore::gitignore::Gitignore, root: &Path, p: &Path) -> bool {
+    p.strip_prefix(root).ok().map_or(false, |rel| {
+        let m = gi.matched_path_or_any_parents(rel, p.is_dir());
+        !m.is_whitelist() && m.is_ignore()
+    })
+}
+
+fn merge_ignores(user: &[String], fmt: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if fmt == "mrpack" {
+        out.extend(BUILTIN_MRPACK_IGNORES.iter().map(|s| (*s).to_string()));
+    }
+    for p in user {
+        let t = p.trim();
+        if !t.is_empty() && !out.iter().any(|x| x == t) {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
+fn scan_dir(root: &Path, cur: &Path) -> Result<Vec<FileNode>, String> {
+    let mut nodes = Vec::new();
+    for entry in std::fs::read_dir(cur).map_err(|e| e.to_string())? {
+        let e = entry.map_err(|e| e.to_string())?;
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().to_string();
+        let meta = match e.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if meta.is_dir() {
+            let children = scan_dir(root, &p)?;
+            let size = children.iter().map(|c| c.size).sum();
+            nodes.push(FileNode {
+                path: to_rel_slash(root, &p)?,
+                name,
+                is_dir: true,
+                size,
+                children: Some(children),
+            });
+        } else if meta.is_file() {
+            nodes.push(FileNode {
+                path: to_rel_slash(root, &p)?,
+                name,
+                is_dir: false,
+                size: meta.len(),
+                children: None,
+            });
+        }
+    }
+    nodes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(nodes)
+}
+
+fn collect_files(
+    root: &Path,
+    selected: &[String],
+    ignores: &[String],
+) -> Result<Vec<(PathBuf, String, u64)>, String> {
+    let gi = build_ignore(root, ignores)?;
+    let mut out = Vec::new();
+
+    for sp in selected {
+        let sp = sp.trim().trim_start_matches('/');
+        if sp.is_empty() {
+            continue;
+        }
+        let abs = if sp == "." {
+            root.to_path_buf()
+        } else {
+            root.join(sp)
+        };
+        if !abs.exists() {
+            continue;
+        }
+
+        if abs.is_file() && !is_ignored(&gi, root, &abs) {
+            let size = abs.metadata().map(|m| m.len()).unwrap_or(0);
+            out.push((abs.clone(), to_rel_slash(root, &abs)?, size));
+        } else if abs.is_dir() {
+            let mut stack = vec![abs];
+            while let Some(dir) = stack.pop() {
+                if is_ignored(&gi, root, &dir) {
+                    continue;
+                }
+                if let Ok(rd) = std::fs::read_dir(&dir) {
+                    for e in rd.flatten() {
+                        let p = e.path();
+                        if is_ignored(&gi, root, &p) {
+                            continue;
+                        }
+                        if let Ok(m) = e.metadata() {
+                            if m.is_dir() {
+                                stack.push(p);
+                            } else if m.is_file() {
+                                if let Ok(rel) = to_rel_slash(root, &p) {
+                                    out.push((p, rel, m.len()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.1.cmp(&b.1));
+    out.dedup_by(|a, b| a.1 == b.1);
+    Ok(out)
+}
+
+fn load_cfg(root: &Path) -> Option<InstanceConfig> {
+    crate::services::game::profiles::read_instance_config(&root.join("config.json")).ok()
+}
+
+fn content_kind(rel: &str) -> Option<&'static str> {
+    let rel = rel.replace('\\', "/");
+    let lower = rel.to_ascii_lowercase();
+    if lower.starts_with("mods/") {
+        Some("mods")
+    } else if lower.starts_with("resourcepacks/") {
+        Some("resourcepacks")
+    } else if lower.starts_with("shaderpacks/") {
+        Some("shaderpacks")
+    } else {
+        None
+    }
+}
+
+fn is_resolvable_pack_file(rel: &str) -> bool {
+    let Some(kind) = content_kind(rel) else {
+        return false;
+    };
+    let name = rel.rsplit('/').next().unwrap_or(rel).to_ascii_lowercase();
+    if name.starts_with('.') {
+        return false;
+    }
+    match kind {
+        "mods" => {
+            name.ends_with(".jar")
+                || name.ends_with(".jar.disabled")
+                || name.ends_with(".zip")
+                || name.ends_with(".zip.disabled")
+        }
+        "resourcepacks" | "shaderpacks" => {
+            name.ends_with(".zip")
+                || name.ends_with(".zip.disabled")
+                || name.ends_with(".jar")
+                || name.ends_with(".jar.disabled")
+        }
+        _ => false,
+    }
+}
+
+fn pack_path_for_rel(rel: &str) -> String {
+    let rel = rel.replace('\\', "/");
+    let lower = rel.to_ascii_lowercase();
+    if lower.ends_with(".disabled") {
+        rel[..rel.len() - ".disabled".len()].to_string()
+    } else {
+        rel
+    }
+}
+
+fn sha1_hex_file_sync(path: &Path) -> Result<String, String> {
+    let data = std::fs::read(path).map_err(|e| format!("SHA1 read {}: {e}", path.display()))?;
+    let mut hasher = Sha1::new();
+    Digest::update(&mut hasher, &data);
+    Ok(format!("{:x}", Digest::finalize(hasher)))
+}
+
+fn sha512_hex_file_sync(path: &Path) -> Result<String, String> {
+    let data = std::fs::read(path).map_err(|e| format!("SHA512 read {}: {e}", path.display()))?;
+    let mut hasher = Sha512::new();
+    Sha2Digest::update(&mut hasher, &data);
+    Ok(format!("{:x}", Sha2Digest::finalize(hasher)))
+}
+
+fn file_for_sha1<'a>(version: &'a ModrinthVersion, sha1: &str) -> Option<&'a ModrinthVersionFile> {
+    let want = sha1.trim().to_ascii_lowercase();
+    version
+        .files
+        .iter()
+        .find(|f| f.sha1_hex().as_deref() == Some(want.as_str()))
+        .or_else(|| {
+            version.primary_file().filter(|f| {
+                f.sha1_hex()
+                    .map(|h| h == want)
+                    .unwrap_or(false)
+                    || f.url.contains(&want)
+            })
+        })
+}
+
+async fn post_version_files_map(
+    client: &reqwest::Client,
+    hashes: &[String],
+) -> Result<HashMap<String, ModrinthVersion>, String> {
+    if hashes.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let body = VersionFilesRequest {
+        hashes: hashes.to_vec(),
+        algorithm: "sha1".to_string(),
+    };
+    let url = format!("{MODRINTH_API_BASE}/version_files");
+    let resp = client
+        .post(&url)
+        .header(USER_AGENT, MODRINTH_USER_AGENT)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Modrinth version_files: сеть: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Modrinth version_files: HTTP {}", resp.status()));
+    }
+    resp.json::<HashMap<String, ModrinthVersion>>()
+        .await
+        .map_err(|e| format!("Modrinth version_files: JSON: {e}"))
+}
+
+async fn resolve_modrinth_entries(
+    app: Option<&AppHandle>,
+    files: &[(PathBuf, String, u64)],
+) -> Result<(Vec<ResolvedMrpackFile>, HashSet<String>), String> {
+    let candidates: Vec<&(PathBuf, String, u64)> = files
+        .iter()
+        .filter(|(_, rel, _)| is_resolvable_pack_file(rel))
+        .collect();
+
+    if candidates.is_empty() {
+        return Ok((Vec::new(), HashSet::new()));
+    }
+
+    if let Some(app) = app {
+        let _ = app.emit(
+            "export-progress",
+            serde_json::json!({
+                "bytes_written": 0u64,
+                "total_bytes": 0u64,
+                "current_file": "Хеширование модов…"
+            }),
+        );
+    }
+
+    let mut sha_to_rels: HashMap<String, Vec<(usize, String, u64)>> = HashMap::new();
+    for (idx, (abs, rel, size)) in candidates.iter().enumerate() {
+        match sha1_hex_file_sync(abs) {
+            Ok(sha1) => {
+                sha_to_rels
+                    .entry(sha1)
+                    .or_default()
+                    .push((idx, (*rel).clone(), *size));
+            }
+            Err(e) => {
+                eprintln!("[export] skip hash {rel}: {e}");
+            }
+        }
+    }
+
+    let hashes: Vec<String> = sha_to_rels.keys().cloned().collect();
+    let client = modrinth_http_client();
+    let mut version_by_sha: HashMap<String, ModrinthVersion> = HashMap::new();
+
+    if let Some(app) = app {
+        let _ = app.emit(
+            "export-progress",
+            serde_json::json!({
+                "bytes_written": 0u64,
+                "total_bytes": 0u64,
+                "current_file": "Поиск на Modrinth…"
+            }),
+        );
+    }
+
+    for chunk in hashes.chunks(VERSION_FILES_BATCH) {
+        match post_version_files_map(&client, chunk).await {
+            Ok(map) => {
+                for (k, v) in map {
+                    version_by_sha.insert(k.trim().to_ascii_lowercase(), v);
+                }
+            }
+            Err(e) => {
+                eprintln!("[export] Modrinth version_files batch failed: {e}");
+            }
+        }
+    }
+
+    let mut resolved = Vec::new();
+    let mut resolved_rels = HashSet::new();
+
+    for (sha1, entries) in sha_to_rels {
+        let Some(version) = version_by_sha.get(&sha1) else {
+            continue;
+        };
+        let Some(file) = file_for_sha1(version, &sha1) else {
+            continue;
+        };
+        let url = file.url.trim();
+        if url.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
+            continue;
+        }
+
+        let sha512 = file
+            .hashes
+            .sha512
+            .as_ref()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty());
+
+        for (_idx, rel, size) in entries {
+            let pack_path = pack_path_for_rel(&rel);
+            if resolved_rels.contains(&rel) || resolved.iter().any(|r: &ResolvedMrpackFile| r.path == pack_path)
+            {
+                resolved_rels.insert(rel);
+                continue;
+            }
+
+            let sha512 = match &sha512 {
+                Some(s) => s.clone(),
+                None => {
+                    let abs = files
+                        .iter()
+                        .find(|(_, r, _)| r == &rel)
+                        .map(|(p, _, _)| p.clone());
+                    match abs.and_then(|p| sha512_hex_file_sync(&p).ok()) {
+                        Some(s) => s,
+                        None => continue,
+                    }
+                }
+            };
+
+            resolved.push(ResolvedMrpackFile {
+                path: pack_path,
+                sha1: sha1.clone(),
+                sha512,
+                downloads: vec![url.to_string()],
+                file_size: size,
+            });
+            resolved_rels.insert(rel);
+        }
+    }
+
+    resolved.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok((resolved, resolved_rels))
+}
+
+fn build_manifest(
+    id: &str,
+    cfg: Option<&InstanceConfig>,
+    resolved: &[ResolvedMrpackFile],
+) -> Result<Vec<u8>, String> {
+    let name = cfg.map(|c| c.name.clone()).unwrap_or_else(|| id.into());
+    let ver = cfg.map(|c| c.game_version.clone()).unwrap_or_default();
+    let loader = cfg.map(|c| c.loader.clone()).unwrap_or_else(|| "vanilla".into());
+    let loader_ver = cfg
+        .and_then(|c| c.loader_version.as_ref())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "*".into());
+
+    let loader_key = match loader.to_lowercase().as_str() {
+        "fabric" => Some("fabric-loader"),
+        "forge" => Some("forge"),
+        "quilt" => Some("quilt-loader"),
+        "neoforge" | "neo-forge" => Some("neoforge"),
+        _ => None,
+    };
+
+    let mut deps = serde_json::Map::new();
+    if !ver.is_empty() {
+        deps.insert("minecraft".into(), ver.into());
+    }
+    if let Some(k) = loader_key {
+        deps.insert(k.into(), loader_ver.into());
+    }
+
+    let files: Vec<serde_json::Value> = resolved
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "path": f.path,
+                "hashes": {
+                    "sha1": f.sha1,
+                    "sha512": f.sha512,
+                },
+                "env": {
+                    "client": "required",
+                    "server": "required",
+                },
+                "downloads": f.downloads,
+                "fileSize": f.file_size,
+            })
+        })
+        .collect();
+
+    serde_json::to_vec_pretty(&serde_json::json!({
+        "formatVersion": 1,
+        "game": "minecraft",
+        "versionId": id,
+        "name": name,
+        "summary": "",
+        "files": files,
+        "dependencies": deps,
+    }))
+    .map_err(|e| e.to_string())
+}
+
+fn get_out_path(
+    fmt: &str,
+    opt: Option<String>,
+    id: &str,
+    cfg: Option<&InstanceConfig>,
+) -> Result<PathBuf, String> {
+    if let Some(p) = opt {
+        return Ok(PathBuf::from(p));
+    }
+    let base = dirs::download_dir()
+        .or_else(dirs::desktop_dir)
+        .ok_or("No download/desktop dir")?;
+
+    let safe = cfg
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| id.into())
+        .replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "_");
+    let ext = if fmt == "mrpack" { "mrpack" } else { "zip" };
+    Ok(base.join(format!("{safe}-{id}.{ext}")))
+}
+
+#[tauri::command]
+pub fn list_build_files(build_id: String) -> Result<Vec<FileNode>, String> {
+    let root = instance_dir_for_id(&build_id)?;
+    if !root.exists() {
+        return Err("Папка не найдена".into());
+    }
+    scan_dir(&root, &root)
+}
+
+#[tauri::command]
+pub async fn preview_export(
+    build_id: String,
+    selected: Vec<String>,
+    ignores: Vec<String>,
+    format: Option<String>,
+) -> Result<PreviewResult, String> {
+    let fmt = if format
+        .as_deref()
+        .unwrap_or("mrpack")
+        .trim()
+        .eq_ignore_ascii_case("zip")
+    {
+        "zip"
+    } else {
+        "mrpack"
+    };
+    let root = instance_dir_for_id(&build_id)?;
+    if !root.exists() {
+        return Err("Папка не найдена".into());
+    }
+
+    let merged = merge_ignores(&ignores, fmt);
+    let files = collect_files(&root, &selected, &merged)?;
+
+    if fmt != "mrpack" {
+        let mut total = 0u64;
+        let out: Vec<PreviewFile> = files
+            .into_iter()
+            .map(|(_, rel, size)| {
+                total += size;
+                PreviewFile {
+                    path: rel,
+                    size,
+                    source: "override".into(),
+                }
+            })
+            .collect();
+        let override_count = out.len() as u32;
+        return Ok(PreviewResult {
+            files: out,
+            total_bytes: total,
+            download_bytes: 0,
+            resolved_count: 0,
+            override_count,
+        });
+    }
+
+    let (resolved, resolved_rels) = resolve_modrinth_entries(None, &files).await?;
+    let mut preview = Vec::new();
+    let mut pack_bytes = 0u64;
+    let mut download_bytes = 0u64;
+
+    for r in &resolved {
+        download_bytes += r.file_size;
+        preview.push(PreviewFile {
+            path: r.path.clone(),
+            size: r.file_size,
+            source: "modrinth".into(),
+        });
+    }
+
+    for (_, rel, size) in &files {
+        if resolved_rels.contains(rel) {
+            continue;
+        }
+        pack_bytes += size;
+        preview.push(PreviewFile {
+            path: rel.clone(),
+            size: *size,
+            source: "override".into(),
+        });
+    }
+
+    let cfg = load_cfg(&root);
+    let manifest = build_manifest(&build_id, cfg.as_ref(), &resolved)?;
+    pack_bytes += manifest.len() as u64;
+
+    let resolved_count = resolved.len() as u32;
+    let override_count = preview.iter().filter(|f| f.source == "override").count() as u32;
+
+    preview.sort_by(|a, b| {
+        a.source
+            .cmp(&b.source)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+
+    Ok(PreviewResult {
+        files: preview,
+        total_bytes: pack_bytes,
+        download_bytes,
+        resolved_count,
+        override_count,
+    })
+}
+
+#[tauri::command]
+pub async fn export_build(
+    app: AppHandle,
+    build_id: String,
+    selected: Vec<String>,
+    ignores: Vec<String>,
+    format: String,
+    out_path: Option<String>,
+) -> Result<ExportResult, String> {
+    let fmt = if format.trim().eq_ignore_ascii_case("mrpack") {
+        "mrpack"
+    } else {
+        "zip"
+    };
+    let root = instance_dir_for_id(&build_id)?;
+    if !root.exists() {
+        return Err("Папка не найдена".into());
+    }
+
+    let cfg = load_cfg(&root);
+    let out_path = get_out_path(fmt, out_path, &build_id, cfg.as_ref())?;
+    if let Some(p) = out_path.parent() {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    }
+
+    let merged = merge_ignores(&ignores, fmt);
+    let files = collect_files(&root, &selected, &merged)?;
+
+    let (resolved, resolved_rels) = if fmt == "mrpack" {
+        resolve_modrinth_entries(Some(&app), &files).await?
+    } else {
+        (Vec::new(), HashSet::new())
+    };
+
+    let override_files: Vec<(PathBuf, String, u64)> = files
+        .into_iter()
+        .filter(|(_, rel, _)| !resolved_rels.contains(rel))
+        .collect();
+
+    let mut total: u64 = override_files.iter().map(|(_, _, s)| *s).sum();
+
+    let manifest = if fmt == "mrpack" {
+        let b = build_manifest(&build_id, cfg.as_ref(), &resolved)?;
+        total += b.len() as u64;
+        Some(b)
+    } else {
+        None
+    };
+
+    let f = File::create(&out_path).map_err(|e| {
+        if e.raw_os_error() == Some(112) {
+            "Недостаточно места".into()
+        } else {
+            e.to_string()
+        }
+    })?;
+
+    let mut writer = zip::ZipWriter::new(f);
+    let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let mut written = 0u64;
+    let mut skipped = Vec::new();
+    let mut packed_overrides = 0u32;
+
+    let emit_prog = |cur: &str, w: u64| {
+        let _ = app.emit(
+            "export-progress",
+            serde_json::json!({
+                "bytes_written": w,
+                "total_bytes": total,
+                "current_file": cur
+            }),
+        );
+    };
+
+    if let Some(mb) = &manifest {
+        writer
+            .start_file("modrinth.index.json", opts)
+            .map_err(|e| e.to_string())?;
+        writer.write_all(mb).map_err(|e| e.to_string())?;
+        written += mb.len() as u64;
+        emit_prog("modrinth.index.json", written);
+    }
+
+    let mut buf = [0u8; 128 * 1024];
+    for (abs, rel, exp_size) in override_files {
+        emit_prog(&rel, written);
+
+        let meta = match abs.metadata() {
+            Ok(m) => m,
+            Err(_) => {
+                skipped.push(rel);
+                continue;
+            }
+        };
+        if !meta.is_file() || meta.len() != exp_size {
+            skipped.push(rel);
+            continue;
+        }
+
+        let mut src = match File::open(&abs) {
+            Ok(f) => f,
+            Err(_) => {
+                skipped.push(rel);
+                continue;
+            }
+        };
+        let arc_path = if fmt == "mrpack" {
+            format!("overrides/{rel}")
+        } else {
+            rel.clone()
+        };
+
+        if writer.start_file(&arc_path, opts).is_err() {
+            skipped.push(rel);
+            continue;
+        }
+
+        let mut ok = true;
+        loop {
+            match src.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if writer.write_all(&buf[..n]).is_err() {
+                        ok = false;
+                        break;
+                    }
+                    written += n as u64;
+                    emit_prog(&rel, written);
+                }
+                Err(_) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            packed_overrides += 1;
+        } else {
+            skipped.push(rel);
+        }
+    }
+
+    writer.finish().map_err(|e| e.to_string())?;
+
+    let path_str = out_path.to_str().ok_or("Invalid path")?.to_string();
+    let resolved_count = resolved.len() as u32;
+
+    let _ = app.emit(
+        "export-finished",
+        serde_json::json!({
+            "path": &path_str,
+            "skipped_files": &skipped,
+            "resolved_count": resolved_count,
+            "override_count": packed_overrides,
+        }),
+    );
+
+    Ok(ExportResult {
+        path: path_str,
+        skipped_files: skipped,
+        resolved_count,
+        override_count: packed_overrides,
+    })
+}
+
+const ELY_AVATAR_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+const ELY_TEXTURE_TIMEOUT: Duration = Duration::from_secs(8);
+
+fn ely_avatar_cache_dir() -> Result<PathBuf, String> {
+    cache::ensure_launcher_cache_layout()?;
+    Ok(cache::avatars_ely_cache_dir()?)
+}
+
+fn normalize_avatar_cache_key(username: &str) -> String {
+    username
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn avatar_cache_file_path(username: &str) -> Result<PathBuf, String> {
+    let key = normalize_avatar_cache_key(username);
+    if key.is_empty() {
+        return Err("Empty Ely username".to_string());
+    }
+    Ok(ely_avatar_cache_dir()?.join(format!("{key}.png")))
+}
+
+fn is_cache_fresh(path: &Path) -> bool {
+    let meta = match std::fs::metadata(path) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let modified = match meta.modified() {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    match SystemTime::now().duration_since(modified) {
+        Ok(age) => age <= Duration::from_secs(ELY_AVATAR_CACHE_TTL_SECS),
+        Err(_) => false,
+    }
+}
+
+fn render_skin_head_png(skin_png: &[u8]) -> Result<Vec<u8>, String> {
+    let skin = image::load_from_memory_with_format(skin_png, ImageFormat::Png)
+        .map_err(|e| format!("Failed to decode skin PNG: {e}"))?;
+    let (w, h) = skin.dimensions();
+    if w < 64 || h < 16 {
+        return Err(format!("Unexpected skin dimensions {w}x{h}"));
+    }
+
+    let base_face = skin.crop_imm(8, 8, 8, 8).to_rgba8();
+    let hat = skin.crop_imm(40, 8, 8, 8).to_rgba8();
+
+    let mut face = base_face;
+    image::imageops::overlay(&mut face, &hat, 0, 0);
+    let enlarged: RgbaImage = image::imageops::resize(&face, 64, 64, FilterType::Nearest);
+
+    let mut out = std::io::Cursor::new(Vec::<u8>::new());
+    DynamicImage::ImageRgba8(enlarged)
+        .write_to(&mut out, ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode avatar PNG: {e}"))?;
+    Ok(out.into_inner())
+}
+
+async fn fetch_ely_texture(kind: &str, username: &str) -> Result<Vec<u8>, String> {
+    let url = format!(
+        "https://skinsystem.ely.by/{}/{}.png",
+        kind,
+        urlencoding::encode(username)
+    );
+    let client = reqwest::Client::builder()
+        .user_agent("mc16launcher/2.0")
+        .timeout(ELY_TEXTURE_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Ely request failed: {e}"))?;
+
+    let status = resp.status();
+    if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::NO_CONTENT {
+        return Err(format!("Ely {kind} unavailable: HTTP {status}"));
+    }
+    if !status.is_success() {
+        return Err(format!("Ely {kind} bad response: HTTP {status}"));
+    }
+
+    resp.bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("Failed to read Ely {kind} body: {e}"))
+}
+
+async fn fetch_ely_skin(username: &str) -> Result<Vec<u8>, String> {
+    fetch_ely_texture("skins", username).await
+}
+
+fn png_data_url(png_bytes: &[u8]) -> String {
+    format!(
+        "data:image/png;base64,{}",
+        BASE64_STANDARD.encode(png_bytes)
+    )
+}
+
+#[tauri::command]
+pub async fn get_ely_skin(username: String) -> Result<Option<String>, String> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let skin_png = match fetch_ely_skin(trimmed).await {
+        Ok(v) => v,
+        Err(error) => {
+            eprintln!("[skin] failed to fetch Ely skin for '{}': {}", trimmed, error);
+            return Ok(None);
+        }
+    };
+
+    Ok(Some(png_data_url(&skin_png)))
+}
+
+#[tauri::command]
+pub async fn get_ely_avatar(username: String) -> Result<Option<String>, String> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let cache_path = avatar_cache_file_path(trimmed)?;
+
+    let skin_png = match fetch_ely_skin(trimmed).await {
+        Ok(v) => v,
+        Err(error) => {
+            eprintln!("[avatar] failed to fetch Ely skin for '{}': {}", trimmed, error);
+            return Ok(std::fs::read(&cache_path).ok().map(|bytes| png_data_url(&bytes)));
+        }
+    };
+    let avatar_png = match render_skin_head_png(&skin_png) {
+        Ok(v) => v,
+        Err(error) => {
+            eprintln!("[avatar] failed to build Ely avatar for '{}': {}", trimmed, error);
+            return Ok(None);
+        }
+    };
+
+    if let Err(error) = std::fs::write(&cache_path, &avatar_png) {
+        eprintln!("[avatar] failed to write Ely avatar cache: {error}");
+    }
+
+    Ok(Some(png_data_url(&avatar_png)))
+}
+
+#[derive(Debug, Deserialize)]
+struct McUsernameLookup {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct McSessionProperty {
+    name: String,
+    value: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct McSessionProfile {
+    #[serde(default)]
+    properties: Vec<McSessionProperty>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McTexturesPayload {
+    #[serde(default)]
+    textures: McTexturesMap,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct McTexturesMap {
+    #[serde(default, rename = "SKIN")]
+    skin: Option<McTextureUrl>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McTextureMeta {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McTextureUrl {
+    url: String,
+    #[serde(default)]
+    metadata: Option<McTextureMeta>,
+}
+
+fn normalize_mc_uuid_cache_key(uuid: &str) -> Result<String, String> {
+    let key = uuid.trim().to_ascii_lowercase().replace('-', "");
+    if key.len() != 32 || !key.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid Minecraft UUID".to_string());
+    }
+    Ok(key)
+}
+
+fn mc_avatar_cache_file_path(uuid: &str) -> Result<PathBuf, String> {
+    let key = normalize_mc_uuid_cache_key(uuid)?;
+    cache::ensure_launcher_cache_layout()?;
+    Ok(cache::avatars_mc_cache_dir()?.join(format!("{key}.png")))
+}
+
+async fn resolve_mc_uuid_by_username(username: &str) -> Result<String, String> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return Err("Username is empty".to_string());
+    }
+
+    let encoded = urlencoding::encode(trimmed);
+    let services_url = format!(
+        "https://api.minecraftservices.com/minecraft/profile/lookup/name/{encoded}"
+    );
+
+    match http_get_bytes_with_retries(&services_url, "Mojang username lookup", 2).await {
+        Ok(body) => {
+            let profile: McUsernameLookup = serde_json::from_slice(&body)
+                .map_err(|e| format!("Failed to parse Mojang username lookup: {e}"))?;
+            return Ok(profile.id);
+        }
+        Err(services_err) => {
+            eprintln!(
+                "[skin] Mojang services username lookup failed for '{trimmed}': {services_err}; trying legacy API"
+            );
+        }
+    }
+
+    let legacy_url = format!(
+        "https://api.mojang.com/users/profiles/minecraft/{encoded}"
+    );
+    let body = http_get_bytes_with_retries(&legacy_url, "Mojang legacy username lookup", 2)
+        .await?;
+    let profiles: Vec<McUsernameLookup> = serde_json::from_slice(&body)
+        .map_err(|e| format!("Failed to parse Mojang legacy username lookup: {e}"))?;
+    profiles
+        .into_iter()
+        .next()
+        .map(|p| p.id)
+        .ok_or_else(|| format!("Player '{trimmed}' was not found"))
+}
+
+async fn fetch_mc_textures_map(uuid: &str) -> Result<McTexturesMap, String> {
+    let key = normalize_mc_uuid_cache_key(uuid)?;
+    let profile_url = format!(
+        "https://sessionserver.mojang.com/session/minecraft/profile/{key}"
+    );
+
+    let body = http_get_bytes_with_retries(&profile_url, "Mojang profile", 3).await?;
+
+    let profile: McSessionProfile = serde_json::from_slice(&body)
+        .map_err(|e| format!("Failed to parse Mojang profile: {e}"))?;
+
+    let textures_value = profile
+        .properties
+        .into_iter()
+        .find(|p| p.name == "textures")
+        .ok_or_else(|| "Mojang profile has no textures".to_string())?
+        .value;
+
+    let decoded = BASE64_STANDARD
+        .decode(textures_value.as_bytes())
+        .map_err(|e| format!("Failed to decode Mojang textures: {e}"))?;
+    let payload: McTexturesPayload = serde_json::from_slice(&decoded)
+        .map_err(|e| format!("Failed to parse Mojang textures JSON: {e}"))?;
+
+    Ok(payload.textures)
+}
+
+fn is_retryable_http_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::BAD_GATEWAY
+        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+        || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+}
+
+async fn http_get_bytes_with_retries(
+    url: &str,
+    label: &str,
+    max_attempts: u32,
+) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("16Launcher/1.0")
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let mut last_err = format!("{label} request failed");
+    for attempt in 0..max_attempts {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(450 * u64::from(attempt))).await;
+        }
+
+        let resp = match client.get(url).send().await {
+            Ok(v) => v,
+            Err(e) => {
+                last_err = format!("{label} request failed: {e}");
+                continue;
+            }
+        };
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NO_CONTENT || status == reqwest::StatusCode::NOT_FOUND {
+            return Err(format!("{label} unavailable: HTTP {status}"));
+        }
+        if status.is_success() {
+            return resp
+                .bytes()
+                .await
+                .map(|b| b.to_vec())
+                .map_err(|e| format!("Failed to read {label} body: {e}"));
+        }
+
+        last_err = format!("{label} bad response: HTTP {status}");
+        if !is_retryable_http_status(status) {
+            break;
+        }
+    }
+
+    Err(last_err)
+}
+
+async fn download_texture_png(url: &str, label: &str) -> Result<Vec<u8>, String> {
+    http_get_bytes_with_retries(url, &format!("Mojang {label}"), 3).await
+}
+
+async fn fetch_mc_skin_png_mojang(uuid: &str) -> Result<Vec<u8>, String> {
+    let textures = fetch_mc_textures_map(uuid).await?;
+    let skin_url = textures
+        .skin
+        .ok_or_else(|| "Mojang profile has no skin texture".to_string())?
+        .url;
+    download_texture_png(&skin_url, "skin").await
+}
+
+async fn fetch_vzge_skin_png(uuid: &str) -> Result<Vec<u8>, String> {
+    let key = normalize_mc_uuid_cache_key(uuid)?;
+    let url = format!("https://vzge.me/full/512/{key}.png");
+    http_get_bytes_with_retries(&url, "vzge.me skin", 2).await
+}
+
+async fn fetch_mc_skin_png(uuid: &str) -> Result<Vec<u8>, String> {
+    match fetch_mc_skin_png_mojang(uuid).await {
+        Ok(v) => Ok(v),
+        Err(mojang_err) => {
+            eprintln!(
+                "[skin] Mojang skin fetch failed for '{uuid}': {mojang_err}; trying vzge.me"
+            );
+            fetch_vzge_skin_png(uuid).await
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_mc_skin(uuid: String) -> Result<Option<String>, String> {
+    let trimmed = uuid.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let skin_png = match fetch_mc_skin_png(trimmed).await {
+        Ok(v) => v,
+        Err(error) => {
+            eprintln!("[skin] failed to fetch Mojang skin for '{trimmed}': {error}");
+            return Ok(None);
+        }
+    };
+
+    Ok(Some(png_data_url(&skin_png)))
+}
+
+fn mc_skin_variant_from_textures(textures: &McTexturesMap) -> &'static str {
+    textures
+        .skin
+        .as_ref()
+        .and_then(|skin| skin.metadata.as_ref())
+        .and_then(|meta| meta.model.as_deref())
+        .map(|model| {
+            if model.eq_ignore_ascii_case("slim") {
+                "slim"
+            } else {
+                "classic"
+            }
+        })
+        .unwrap_or("classic")
+}
+
+fn clear_mc_avatar_cache(uuid: &str) {
+    if let Ok(path) = mc_avatar_cache_file_path(uuid) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+async fn post_mc_skin_from_url(
+    access_token: &str,
+    skin_url: &str,
+    variant: &str,
+) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("16Launcher/1.0")
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let resp = client
+        .post("https://api.minecraftservices.com/minecraft/profile/skins")
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({
+            "variant": variant,
+            "url": skin_url
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Minecraft skin change request failed: {e}"))?;
+
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("MC_TOKEN_EXPIRED".to_string());
+    }
+    if !status.is_success() {
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<empty>".to_string());
+        return Err(format!("Minecraft skin change failed: HTTP {status}: {body}"));
+    }
+
+    Ok(())
+}
+
+async fn apply_mc_skin_from_username(username: &str) -> Result<Vec<u8>, String> {
+    use crate::services::game::accounts::{get_profile, save_full_profile};
+    use crate::services::game::runtime::ensure_ms_minecraft_session;
+
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return Err("Username is empty".to_string());
+    }
+
+    let source_uuid = resolve_mc_uuid_by_username(trimmed).await?;
+    let textures = fetch_mc_textures_map(&source_uuid).await?;
+    let skin_url = textures
+        .skin
+        .as_ref()
+        .ok_or_else(|| format!("Player '{trimmed}' has no skin"))?
+        .url
+        .clone();
+    let variant = mc_skin_variant_from_textures(&textures);
+
+    let mut access_token = resolve_mc_access_token().await?;
+    let mut retried = false;
+    loop {
+        match post_mc_skin_from_url(&access_token, &skin_url, variant).await {
+            Ok(()) => break,
+            Err(e) if e == "MC_TOKEN_EXPIRED" && !retried => {
+                retried = true;
+                match ensure_ms_minecraft_session().await? {
+                    Some((_name, _uuid, new_token)) => {
+                        if let Ok(mut p) = get_profile() {
+                            p.mc_access_token = Some(new_token.clone());
+                            let _ = save_full_profile(&p);
+                        }
+                        access_token = new_token;
+                        continue;
+                    }
+                    None => {
+                        return Err(
+                            "Сессия Minecraft истекла. Войдите снова через Microsoft.".to_string(),
+                        );
+                    }
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    let skin_png = match download_texture_png(&skin_url, "skin").await {
+        Ok(v) => v,
+        Err(_) => fetch_mc_skin_png(&source_uuid).await?,
+    };
+
+    if let Some(mc_uuid) = current_mc_uuid() {
+        let _ = save_skin_to_local_library(&mc_uuid, &skin_png, variant, Some(trimmed));
+    }
+
+    if let Ok(profile) = get_profile() {
+        if let Some(uuid) = profile.mc_uuid.as_ref().filter(|s| !s.trim().is_empty()) {
+            clear_mc_avatar_cache(uuid);
+            if let Ok(remote_png) = fetch_mc_skin_png(uuid).await {
+                return Ok(remote_png);
+            }
+        }
+    }
+
+    Ok(skin_png)
+}
+
+#[tauri::command]
+pub async fn apply_mc_skin_by_username(username: String) -> Result<Option<String>, String> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let skin_png = match apply_mc_skin_from_username(trimmed).await {
+        Ok(v) => v,
+        Err(error) => {
+            if error.contains("was not found") || error.contains("no skin") {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+    };
+
+    Ok(Some(png_data_url(&skin_png)))
+}
+
+#[tauri::command]
+pub async fn get_mc_avatar(uuid: String) -> Result<Option<String>, String> {
+    let trimmed = uuid.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let cache_path = mc_avatar_cache_file_path(trimmed)?;
+
+    if is_cache_fresh(&cache_path) {
+        match std::fs::read(&cache_path) {
+            Ok(bytes) => return Ok(Some(png_data_url(&bytes))),
+            Err(error) => eprintln!("[avatar] failed to read Mojang avatar cache: {error}"),
+        }
+    }
+
+    let skin_png = match fetch_mc_skin_png(trimmed).await {
+        Ok(v) => v,
+        Err(error) => {
+            eprintln!("[avatar] failed to fetch Mojang skin for '{trimmed}': {error}");
+            if let Ok(bytes) = std::fs::read(&cache_path) {
+                if !bytes.is_empty() {
+                    eprintln!("[avatar] using stale cache for '{trimmed}'");
+                    return Ok(Some(png_data_url(&bytes)));
+                }
+            }
+            return Ok(None);
+        }
+    };
+
+    let avatar_png = match render_skin_head_png(&skin_png) {
+        Ok(v) => v,
+        Err(error) => {
+            eprintln!("[avatar] failed to build Mojang avatar for '{trimmed}': {error}");
+            return Ok(None);
+        }
+    };
+
+    if let Err(error) = std::fs::write(&cache_path, &avatar_png) {
+        eprintln!("[avatar] failed to write Mojang avatar cache: {error}");
+    }
+
+    Ok(Some(png_data_url(&avatar_png)))
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct McCapeInfo {
+    pub id: String,
+    pub alias: String,
+    pub url: String,
+    pub state: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct McAuthCape {
+    id: String,
+    #[serde(default)]
+    alias: String,
+    url: String,
+    #[serde(default)]
+    state: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct McAuthSkin {
+    id: String,
+    #[serde(default)]
+    alias: String,
+    url: String,
+    #[serde(default)]
+    variant: String,
+    #[serde(default)]
+    state: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct McAuthProfile {
+    #[serde(default)]
+    skins: Vec<McAuthSkin>,
+    #[serde(default)]
+    capes: Vec<McAuthCape>,
+}
+
+async fn resolve_mc_access_token() -> Result<String, String> {
+    use crate::services::game::accounts::get_profile;
+    use crate::services::game::runtime::ensure_ms_minecraft_session;
+
+    let profile = get_profile()?;
+    if let Some(token) = profile
+        .mc_access_token
+        .as_ref()
+        .filter(|t| !t.trim().is_empty())
+    {
+        return Ok(token.clone());
+    }
+
+    match ensure_ms_minecraft_session().await? {
+        Some((_name, _uuid, token)) => Ok(token),
+        None => Err(
+            "Нет активной сессии Minecraft. Войдите через Microsoft на вкладке «Аккаунты».".to_string(),
+        ),
+    }
+}
+
+async fn fetch_mc_auth_profile(access_token: &str) -> Result<McAuthProfile, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("16Launcher/1.0")
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let resp = client
+        .get("https://api.minecraftservices.com/minecraft/profile")
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| format!("Minecraft profile request failed: {e}"))?;
+
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("MC_TOKEN_EXPIRED".to_string());
+    }
+    if !status.is_success() {
+        return Err(format!("Minecraft profile bad response: HTTP {status}"));
+    }
+
+    resp.json()
+        .await
+        .map_err(|e| format!("Failed to parse Minecraft profile: {e}"))
+}
+
+async fn fetch_mc_capes_with_token(access_token: &str) -> Result<Vec<McCapeInfo>, String> {
+    let profile = fetch_mc_auth_profile(access_token).await?;
+    Ok(profile
+        .capes
+        .into_iter()
+        .map(|c| McCapeInfo {
+            id: c.id,
+            alias: if c.alias.trim().is_empty() {
+                "Cape".to_string()
+            } else {
+                c.alias
+            },
+            url: c.url,
+            state: if c.state.eq_ignore_ascii_case("ACTIVE") {
+                "ACTIVE".to_string()
+            } else {
+                "INACTIVE".to_string()
+            },
+        })
+        .collect())
+}
+
+async fn fetch_mc_capes_resilient() -> Result<Vec<McCapeInfo>, String> {
+    use crate::services::game::accounts::{get_profile, save_full_profile};
+    use crate::services::game::runtime::ensure_ms_minecraft_session;
+
+    let token = resolve_mc_access_token().await?;
+    match fetch_mc_capes_with_token(&token).await {
+        Ok(capes) => Ok(capes),
+        Err(e) if e == "MC_TOKEN_EXPIRED" => {
+            match ensure_ms_minecraft_session().await? {
+                Some((_name, _uuid, new_token)) => {
+                    if let Ok(mut p) = get_profile() {
+                        p.mc_access_token = Some(new_token.clone());
+                        let _ = save_full_profile(&p);
+                    }
+                    fetch_mc_capes_with_token(&new_token).await
+                }
+                None => Err(
+                    "Сессия Minecraft истекла. Войдите снова через Microsoft.".to_string(),
+                ),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+pub async fn list_mc_capes() -> Result<Vec<McCapeInfo>, String> {
+    fetch_mc_capes_resilient().await
+}
+
+#[tauri::command]
+pub async fn set_mc_active_cape(cape_id: Option<String>) -> Result<Vec<McCapeInfo>, String> {
+    use crate::services::game::accounts::{get_profile, save_full_profile};
+    use crate::services::game::runtime::ensure_ms_minecraft_session;
+
+    let mut access_token = resolve_mc_access_token().await?;
+    let client = reqwest::Client::builder()
+        .user_agent("16Launcher/1.0")
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let mut retried = false;
+    loop {
+        let resp = if let Some(id) = cape_id.as_ref().filter(|s| !s.trim().is_empty()) {
+            client
+                .put("https://api.minecraftservices.com/minecraft/profile/capes/active")
+                .bearer_auth(&access_token)
+                .json(&serde_json::json!({ "capeId": id.trim() }))
+                .send()
+                .await
+                .map_err(|e| format!("Minecraft cape activate request failed: {e}"))?
+        } else {
+            client
+                .delete("https://api.minecraftservices.com/minecraft/profile/capes/active")
+                .bearer_auth(&access_token)
+                .send()
+                .await
+                .map_err(|e| format!("Minecraft cape hide request failed: {e}"))?
+        };
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED && !retried {
+            retried = true;
+            match ensure_ms_minecraft_session().await? {
+                Some((_name, _uuid, new_token)) => {
+                    if let Ok(mut p) = get_profile() {
+                        p.mc_access_token = Some(new_token.clone());
+                        let _ = save_full_profile(&p);
+                    }
+                    access_token = new_token;
+                    continue;
+                }
+                None => {
+                    return Err(
+                        "Сессия Minecraft истекла. Войдите снова через Microsoft.".to_string(),
+                    );
+                }
+            }
+        }
+        if !status.is_success() {
+            let body = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "<empty>".to_string());
+            return Err(format!(
+                "Minecraft cape update failed: HTTP {status}: {body}"
+            ));
+        }
+        break;
+    }
+
+    fetch_mc_capes_resilient().await
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct McSkinInfo {
+    pub id: String,
+    pub alias: String,
+    pub url: String,
+    pub variant: String,
+    pub state: String,
+}
+
+const LOCAL_SKIN_ID_PREFIX: &str = "local:";
+const LOCAL_SKIN_URL_PREFIX: &str = "16launcher-skin:";
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct LocalSkinEntry {
+    id: String,
+    alias: String,
+    filename: String,
+    variant: String,
+    #[serde(default)]
+    sha1: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct LocalSkinIndex {
+    #[serde(default)]
+    skins: Vec<LocalSkinEntry>,
+}
+
+fn sha1_hex(bytes: &[u8]) -> String {
+    let digest = Sha1::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn normalize_mc_uuid(uuid: &str) -> String {
+    uuid.trim().to_ascii_lowercase().replace('-', "")
+}
+
+fn local_skins_dir_for_uuid(mc_uuid: &str) -> Result<PathBuf, String> {
+    let dir = crate::app::paths::launcher_data_dir()?
+        .join("skins")
+        .join(normalize_mc_uuid(mc_uuid));
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Не удалось создать папку библиотеки скинов: {e}"))?;
+    Ok(dir)
+}
+
+fn local_skins_index_path(mc_uuid: &str) -> Result<PathBuf, String> {
+    Ok(local_skins_dir_for_uuid(mc_uuid)?.join("index.json"))
+}
+
+fn load_local_skin_index(mc_uuid: &str) -> Result<LocalSkinIndex, String> {
+    let path = local_skins_index_path(mc_uuid)?;
+    if !path.is_file() {
+        return Ok(LocalSkinIndex::default());
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Не удалось прочитать index.json скинов: {e}"))?;
+    if text.trim().is_empty() {
+        return Ok(LocalSkinIndex::default());
+    }
+    serde_json::from_str(&text).map_err(|e| format!("Ошибка разбора index.json скинов: {e}"))
+}
+
+fn save_local_skin_index(mc_uuid: &str, index: &LocalSkinIndex) -> Result<(), String> {
+    let path = local_skins_index_path(mc_uuid)?;
+    let text = serde_json::to_string_pretty(index)
+        .map_err(|e| format!("Не удалось сериализовать index.json скинов: {e}"))?;
+    std::fs::write(&path, text)
+        .map_err(|e| format!("Не удалось сохранить index.json скинов: {e}"))
+}
+
+fn current_mc_uuid() -> Option<String> {
+    use crate::services::game::accounts::get_profile;
+    get_profile()
+        .ok()
+        .and_then(|p| p.mc_uuid)
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+}
+
+fn local_skin_url(id: &str) -> String {
+    format!("{LOCAL_SKIN_URL_PREFIX}{id}")
+}
+
+fn is_local_skin_id(id: &str) -> bool {
+    id.starts_with(LOCAL_SKIN_ID_PREFIX)
+}
+
+fn parse_local_skin_url(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    trimmed
+        .strip_prefix(LOCAL_SKIN_URL_PREFIX)
+        .map(|s| s.to_string())
+        .filter(|s| is_local_skin_id(s))
+}
+
+fn read_local_skin_png(mc_uuid: &str, skin_id: &str) -> Result<Vec<u8>, String> {
+    let index = load_local_skin_index(mc_uuid)?;
+    let entry = index
+        .skins
+        .iter()
+        .find(|s| s.id == skin_id)
+        .ok_or_else(|| "Скин не найден в локальной библиотеке".to_string())?;
+    let path = local_skins_dir_for_uuid(mc_uuid)?.join(&entry.filename);
+    std::fs::read(&path).map_err(|e| format!("Не удалось прочитать файл скина: {e}"))
+}
+
+fn save_skin_to_local_library(
+    mc_uuid: &str,
+    png_bytes: &[u8],
+    variant: &str,
+    alias: Option<&str>,
+) -> Result<LocalSkinEntry, String> {
+    if png_bytes.is_empty() {
+        return Err("Файл скина пуст".to_string());
+    }
+    let hash = sha1_hex(png_bytes);
+    let mut index = load_local_skin_index(mc_uuid)?;
+    if let Some(pos) = index.skins.iter().position(|s| s.sha1 == hash) {
+        let existing = &mut index.skins[pos];
+        existing.variant = if variant.eq_ignore_ascii_case("slim") {
+            "SLIM".to_string()
+        } else {
+            "CLASSIC".to_string()
+        };
+        if let Some(name) = alias.map(str::trim).filter(|s| !s.is_empty()) {
+            existing.alias = name.to_string();
+        }
+        let cloned = existing.clone();
+        save_local_skin_index(mc_uuid, &index)?;
+        return Ok(cloned);
+    }
+
+    let id = format!("{LOCAL_SKIN_ID_PREFIX}{hash}");
+    let filename = format!("{hash}.png");
+    let path = local_skins_dir_for_uuid(mc_uuid)?.join(&filename);
+    std::fs::write(&path, png_bytes)
+        .map_err(|e| format!("Не удалось сохранить скин в библиотеку: {e}"))?;
+
+    let entry = LocalSkinEntry {
+        id,
+        alias: alias
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Skin")
+            .to_string(),
+        filename,
+        variant: if variant.eq_ignore_ascii_case("slim") {
+            "SLIM".to_string()
+        } else {
+            "CLASSIC".to_string()
+        },
+        sha1: hash,
+    };
+    index.skins.insert(0, entry.clone());
+    save_local_skin_index(mc_uuid, &index)?;
+    Ok(entry)
+}
+
+fn map_mc_skin_info(s: McAuthSkin) -> McSkinInfo {
+    McSkinInfo {
+        id: s.id,
+        alias: if s.alias.trim().is_empty() {
+            "Skin".to_string()
+        } else {
+            s.alias
+        },
+        url: s.url,
+        variant: if s.variant.eq_ignore_ascii_case("SLIM") {
+            "SLIM".to_string()
+        } else {
+            "CLASSIC".to_string()
+        },
+        state: if s.state.eq_ignore_ascii_case("ACTIVE") {
+            "ACTIVE".to_string()
+        } else {
+            "INACTIVE".to_string()
+        },
+    }
+}
+
+async fn fetch_mc_skins_with_token(access_token: &str) -> Result<Vec<McSkinInfo>, String> {
+    let profile = fetch_mc_auth_profile(access_token).await?;
+    Ok(profile.skins.into_iter().map(map_mc_skin_info).collect())
+}
+
+fn list_local_skins_only(active_sha1: Option<&str>) -> Result<Vec<McSkinInfo>, String> {
+    let Some(mc_uuid) = current_mc_uuid() else {
+        return Ok(Vec::new());
+    };
+    let index = match load_local_skin_index(&mc_uuid) {
+        Ok(index) => index,
+        Err(error) => {
+            eprintln!("[skin] local index load failed: {error}");
+            return Ok(Vec::new());
+        }
+    };
+    Ok(index
+        .skins
+        .into_iter()
+        .map(|entry| {
+            let is_active = active_sha1
+                .map(|h| h == entry.sha1.as_str())
+                .unwrap_or(false);
+            McSkinInfo {
+                id: entry.id.clone(),
+                alias: entry.alias,
+                url: local_skin_url(&entry.id),
+                variant: entry.variant,
+                state: if is_active {
+                    "ACTIVE".to_string()
+                } else {
+                    "INACTIVE".to_string()
+                },
+            }
+        })
+        .collect())
+}
+
+async fn merge_local_and_remote_skins(
+    remote: Vec<McSkinInfo>,
+) -> Result<Vec<McSkinInfo>, String> {
+    let Some(mc_uuid) = current_mc_uuid() else {
+        return Ok(remote);
+    };
+
+    let mut active_sha1: Option<String> = None;
+    if let Some(active) = remote.iter().find(|s| s.state == "ACTIVE") {
+        if !active.url.trim().is_empty() {
+            if let Ok(png) = download_texture_png(&active.url, "skin").await {
+                active_sha1 = Some(sha1_hex(&png));
+                let _ = save_skin_to_local_library(
+                    &mc_uuid,
+                    &png,
+                    &active.variant,
+                    Some(&active.alias),
+                );
+            }
+        }
+    }
+
+    let mut out = list_local_skins_only(active_sha1.as_deref())?;
+
+    if out.is_empty() {
+        out = remote;
+    } else if !out.iter().any(|s| s.state == "ACTIVE") {
+        if let Some(active) = remote.into_iter().find(|s| s.state == "ACTIVE") {
+            out.insert(0, active);
+        }
+    }
+
+    Ok(out)
+}
+
+async fn fetch_remote_skins_resilient() -> Result<Vec<McSkinInfo>, String> {
+    use crate::services::game::accounts::{get_profile, save_full_profile};
+    use crate::services::game::runtime::ensure_ms_minecraft_session;
+
+    let token = resolve_mc_access_token().await?;
+    match fetch_mc_skins_with_token(&token).await {
+        Ok(skins) => Ok(skins),
+        Err(e) if e == "MC_TOKEN_EXPIRED" => {
+            match ensure_ms_minecraft_session().await? {
+                Some((_name, _uuid, new_token)) => {
+                    if let Ok(mut p) = get_profile() {
+                        p.mc_access_token = Some(new_token.clone());
+                        let _ = save_full_profile(&p);
+                    }
+                    fetch_mc_skins_with_token(&new_token).await
+                }
+                None => Err(
+                    "Сессия Minecraft истекла. Войдите снова через Microsoft.".to_string(),
+                ),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+async fn fetch_mc_skins_resilient() -> Result<Vec<McSkinInfo>, String> {
+    match fetch_remote_skins_resilient().await {
+        Ok(remote) => merge_local_and_remote_skins(remote).await,
+        Err(error) => {
+            eprintln!("[skin] remote skin library failed: {error}; falling back to local");
+            let local = list_local_skins_only(None)?;
+            if !local.is_empty() {
+                return Ok(local);
+            }
+            Err(error)
+        }
+    }
+}
+
+fn mc_skin_variant_to_api(variant: &str) -> &'static str {
+    if variant.eq_ignore_ascii_case("SLIM") {
+        "slim"
+    } else {
+        "classic"
+    }
+}
+
+async fn post_mc_skin_upload(
+    access_token: &str,
+    png_bytes: &[u8],
+    variant: &str,
+) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("16Launcher/1.0")
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let part = reqwest::multipart::Part::bytes(png_bytes.to_vec())
+        .file_name("skin.png")
+        .mime_str("image/png")
+        .map_err(|e| format!("Invalid skin MIME type: {e}"))?;
+    let form = reqwest::multipart::Form::new()
+        .text("variant", variant.to_string())
+        .part("file", part);
+
+    let resp = client
+        .post("https://api.minecraftservices.com/minecraft/profile/skins")
+        .bearer_auth(access_token)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Minecraft skin upload request failed: {e}"))?;
+
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("MC_TOKEN_EXPIRED".to_string());
+    }
+    if !status.is_success() {
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<empty>".to_string());
+        return Err(format!("Minecraft skin upload failed: HTTP {status}: {body}"));
+    }
+
+    Ok(())
+}
+
+async fn upload_png_bytes_as_active_skin(
+    png_bytes: &[u8],
+    api_variant: &str,
+) -> Result<(), String> {
+    use crate::services::game::accounts::{get_profile, save_full_profile};
+    use crate::services::game::runtime::ensure_ms_minecraft_session;
+
+    let mut access_token = resolve_mc_access_token().await?;
+    let mut retried = false;
+    loop {
+        match post_mc_skin_upload(&access_token, png_bytes, api_variant).await {
+            Ok(()) => return Ok(()),
+            Err(e) if e == "MC_TOKEN_EXPIRED" && !retried => {
+                retried = true;
+                match ensure_ms_minecraft_session().await? {
+                    Some((_name, _uuid, new_token)) => {
+                        if let Ok(mut p) = get_profile() {
+                            p.mc_access_token = Some(new_token.clone());
+                            let _ = save_full_profile(&p);
+                        }
+                        access_token = new_token;
+                        continue;
+                    }
+                    None => {
+                        return Err(
+                            "Сессия Minecraft истекла. Войдите снова через Microsoft.".to_string(),
+                        );
+                    }
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+async fn apply_mc_skin_from_library(skin_id: &str) -> Result<Vec<u8>, String> {
+    use crate::services::game::accounts::{get_profile, save_full_profile};
+    use crate::services::game::runtime::ensure_ms_minecraft_session;
+
+    let trimmed_id = skin_id.trim();
+    if trimmed_id.is_empty() {
+        return Err("Skin id is empty".to_string());
+    }
+
+    if is_local_skin_id(trimmed_id) {
+        let mc_uuid = current_mc_uuid().ok_or_else(|| {
+            "Нет UUID Minecraft. Войдите через Microsoft на вкладке «Аккаунты».".to_string()
+        })?;
+        let index = load_local_skin_index(&mc_uuid)?;
+        let entry = index
+            .skins
+            .iter()
+            .find(|s| s.id == trimmed_id)
+            .ok_or_else(|| "Skin not found in library".to_string())?
+            .clone();
+        let png_bytes = read_local_skin_png(&mc_uuid, trimmed_id)?;
+        let api_variant = mc_skin_variant_to_api(&entry.variant);
+        upload_png_bytes_as_active_skin(&png_bytes, api_variant).await?;
+
+        if let Ok(profile) = get_profile() {
+            if let Some(uuid) = profile.mc_uuid.as_ref().filter(|s| !s.trim().is_empty()) {
+                clear_mc_avatar_cache(uuid);
+                if let Ok(remote_png) = fetch_mc_skin_png(uuid).await {
+                    return Ok(remote_png);
+                }
+            }
+        }
+        return Ok(png_bytes);
+    }
+
+    let mut access_token = resolve_mc_access_token().await?;
+    let skins = fetch_mc_skins_with_token(&access_token).await?;
+    let selected = skins
+        .into_iter()
+        .find(|s| s.id.eq_ignore_ascii_case(trimmed_id))
+        .ok_or_else(|| "Skin not found in library".to_string())?;
+    let variant = mc_skin_variant_to_api(&selected.variant);
+
+    let mut retried = false;
+    loop {
+        match post_mc_skin_from_url(&access_token, &selected.url, variant).await {
+            Ok(()) => break,
+            Err(e) if e == "MC_TOKEN_EXPIRED" && !retried => {
+                retried = true;
+                match ensure_ms_minecraft_session().await? {
+                    Some((_name, _uuid, new_token)) => {
+                        if let Ok(mut p) = get_profile() {
+                            p.mc_access_token = Some(new_token.clone());
+                            let _ = save_full_profile(&p);
+                        }
+                        access_token = new_token;
+                        continue;
+                    }
+                    None => {
+                        return Err(
+                            "Сессия Minecraft истекла. Войдите снова через Microsoft.".to_string(),
+                        );
+                    }
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    if let Ok(profile) = get_profile() {
+        if let Some(uuid) = profile.mc_uuid.as_ref().filter(|s| !s.trim().is_empty()) {
+            clear_mc_avatar_cache(uuid);
+            return fetch_mc_skin_png(uuid).await;
+        }
+    }
+
+    download_texture_png(&selected.url, "skin").await
+}
+
+async fn upload_mc_skin_from_file(file_path: &str, variant: &str) -> Result<Vec<u8>, String> {
+    use crate::services::game::accounts::get_profile;
+
+    let path = PathBuf::from(file_path.trim());
+    if !path.is_file() {
+        return Err("Файл скина не найден".to_string());
+    }
+
+    let png_bytes = std::fs::read(&path).map_err(|e| format!("Не удалось прочитать файл скина: {e}"))?;
+    if png_bytes.is_empty() {
+        return Err("Файл скина пуст".to_string());
+    }
+
+    let api_variant = match variant.trim().to_ascii_lowercase().as_str() {
+        "slim" => "slim",
+        _ => "classic",
+    };
+
+    if let Some(mc_uuid) = current_mc_uuid() {
+        let alias = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string());
+        let _ = save_skin_to_local_library(
+            &mc_uuid,
+            &png_bytes,
+            api_variant,
+            alias.as_deref(),
+        );
+    }
+
+    upload_png_bytes_as_active_skin(&png_bytes, api_variant).await?;
+
+    if let Ok(profile) = get_profile() {
+        if let Some(uuid) = profile.mc_uuid.as_ref().filter(|s| !s.trim().is_empty()) {
+            clear_mc_avatar_cache(uuid);
+            if let Ok(remote_png) = fetch_mc_skin_png(uuid).await {
+                return Ok(remote_png);
+            }
+        }
+    }
+
+    Ok(png_bytes)
+}
+
+#[tauri::command]
+pub async fn get_mc_texture_data_url(url: String) -> Result<Option<String>, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(local_id) = parse_local_skin_url(trimmed) {
+        let Some(mc_uuid) = current_mc_uuid() else {
+            return Ok(None);
+        };
+        return match read_local_skin_png(&mc_uuid, &local_id) {
+            Ok(png) => Ok(Some(png_data_url(&png))),
+            Err(error) => {
+                eprintln!("[texture] failed to read local skin '{local_id}': {error}");
+                Ok(None)
+            }
+        };
+    }
+
+    let png = match download_texture_png(trimmed, "texture").await {
+        Ok(v) => v,
+        Err(error) => {
+            eprintln!("[texture] failed to fetch Mojang texture '{trimmed}': {error}");
+            return Ok(None);
+        }
+    };
+
+    Ok(Some(png_data_url(&png)))
+}
+
+#[tauri::command]
+pub async fn list_mc_skins() -> Result<Vec<McSkinInfo>, String> {
+    fetch_mc_skins_resilient().await
+}
+
+#[tauri::command]
+pub async fn set_mc_active_skin(skin_id: String) -> Result<Option<String>, String> {
+    let skin_png = apply_mc_skin_from_library(&skin_id).await?;
+    Ok(Some(png_data_url(&skin_png)))
+}
+
+#[tauri::command]
+pub async fn upload_mc_skin(file_path: String, variant: String) -> Result<Option<String>, String> {
+    let skin_png = upload_mc_skin_from_file(&file_path, &variant).await?;
+    Ok(Some(png_data_url(&skin_png)))
+}

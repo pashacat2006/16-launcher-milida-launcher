@@ -1,0 +1,402 @@
+import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useRef, useState } from "react";
+import { confirmDialog } from "../../../lib/confirmDialog";
+import {
+  type ApplyContentUpdatesResult,
+  type ContentSnapshot,
+  type ContentTab,
+  type InstanceProfile,
+  type NotificationKind,
+  type ProfileBackupSettings,
+  type ProfileContentUpdate,
+  type ProfileIncompatibleContent,
+  type ProfileItemEntry,
+} from "../types";
+import { invoke } from "@tauri-apps/api/core";
+
+type ContentUpdatesDeps = {
+  selectedProfile: InstanceProfile | null;
+  contentTab: ContentTab;
+  setContentUpdatesAvailableFilenames: Dispatch<SetStateAction<Set<string>>>;
+  showNotification: (kind: NotificationKind, message: string, options?: { sound?: boolean; }) => void;
+  tt: (key: string, vars?: Record<string, string | number>) => string;
+  refreshItems: (id: string, tab: ContentTab) => Promise<void>;
+};
+
+export function useContentUpdates(deps: ContentUpdatesDeps) {
+  const {
+    selectedProfile,
+    contentTab,
+    setContentUpdatesAvailableFilenames,
+    showNotification,
+    tt,
+    refreshItems,
+  } = deps;
+
+  const [contentUpdates, setContentUpdates] = useState<ProfileContentUpdate[]>([]);
+  const [contentUpdatesChecking, setContentUpdatesChecking] = useState(false);
+  const [contentUpdatesApplying, setContentUpdatesApplying] = useState(false);
+
+  const [contentUpdatesSingleApplyingFilename, setContentUpdatesSingleApplyingFilename] =
+    useState<string | null>(null);
+
+  const [isContentUpdatesModalOpen, setIsContentUpdatesModalOpen] = useState(false);
+
+  const [contentSnapshot, setContentSnapshot] = useState<ContentSnapshot | null>(null);
+  const [contentRollbackBusy, setContentRollbackBusy] = useState(false);
+
+  const profileId = selectedProfile?.id ?? null;
+  const profileIdRef = useRef(profileId);
+  profileIdRef.current = profileId;
+  const snapshotCategory =
+    contentTab === "mods"
+      ? "mods"
+      : contentTab === "resourcepacks"
+        ? "resourcepacks"
+        : "shaderpacks";
+
+  async function refreshModUpdateBadges(forProfileId: string) {
+    if (snapshotCategory !== "mods") return;
+    try {
+      const updates = await invoke<ProfileContentUpdate[]>("check_profile_content_updates", {
+        profileId: forProfileId,
+        category: "mods",
+      });
+      if (profileIdRef.current !== forProfileId) return;
+      setContentUpdatesAvailableFilenames(new Set(updates.map((u) => u.filename)));
+    } catch (e) {
+      console.warn("Failed to refresh update badges:", e);
+    }
+  }
+
+  async function refreshContentSnapshot() {
+    if (!profileId) {
+      setContentSnapshot(null);
+      return;
+    }
+    try {
+      const list = await invoke<ContentSnapshot[]>("list_content_snapshots", { profileId });
+      setContentSnapshot(list.find((s) => s.category === snapshotCategory) ?? null);
+    } catch (e) {
+      console.warn("Failed to list content snapshots:", e);
+      setContentSnapshot(null);
+    }
+  }
+
+  useEffect(() => {
+    void refreshContentSnapshot();
+  }, [profileId, snapshotCategory]);
+
+  const [selectedContentUpdateFilenames, setSelectedContentUpdateFilenames] = useState<
+    Set<string>
+
+  >(new Set());
+
+  async function applyContentUpdatesAfterVersionChange(
+    profileId: string,
+  ): Promise<{ updated: number; incompatible: ProfileIncompatibleContent[] }> {
+    const categories = ["mods", "resourcepacks", "shaderpacks"] as const;
+    let total = 0;
+    for (const category of categories) {
+      try {
+        const updates = await invoke<ProfileContentUpdate[]>("check_profile_content_updates", {
+          profileId,
+          category,
+        });
+        if (updates.length === 0) continue;
+        const payload = updates.map((u) => ({
+          filename: u.filename,
+          enabled: u.enabled,
+          latestUrl: u.latestUrl,
+          latestFilename: u.latestFilename,
+          latestSha1: u.latestSha1 ?? null,
+        }));
+        const result = await invoke<ApplyContentUpdatesResult>("apply_profile_content_updates", {
+          profileId,
+          category,
+          updates: payload,
+        });
+        total += result.applied;
+        if (result.failed.length > 0) {
+          console.warn(`Content update failed for ${category}:`, result.failed);
+        }
+      } catch (e) {
+        console.warn(`Content update failed for ${category}:`, e);
+      }
+    }
+
+    const incompatible: ProfileIncompatibleContent[] = [];
+    try {
+      const mods = await invoke<ProfileIncompatibleContent[]>(
+        "check_profile_incompatible_content",
+        {
+          profileId,
+          category: "mods",
+        },
+      );
+      for (const mod of mods) {
+        incompatible.push(mod);
+        if (!mod.enabled) continue;
+        try {
+          await invoke("set_profile_item_enabled", {
+            id: profileId,
+            category: "mods",
+            filename: mod.filename,
+            enabled: false,
+          });
+        } catch (e) {
+          console.warn(`Failed to disable incompatible mod ${mod.filename}:`, e);
+        }
+      }
+    } catch (e) {
+      console.warn("Incompatible mods check failed:", e);
+    }
+
+    return { updated: total, incompatible };
+  }
+
+  async function backupBeforeUpdate(profileId: string): Promise<boolean> {
+    let mode: ProfileBackupSettings["backup_before_update"] = "off";
+    try {
+      const settings = await invoke<ProfileBackupSettings>("get_profile_backup_settings", {
+        profileId,
+      });
+      mode = settings.backup_before_update;
+    } catch (e) {
+      console.warn("Failed to read backup settings:", e);
+    }
+    if (mode === "off") return true;
+    if (mode === "ask") {
+      const wantsBackup = await confirmDialog({
+        title: tt("modpacks.backups.beforeUpdate.askTitle"),
+        message: tt("modpacks.backups.beforeUpdate.askMessage"),
+        confirmLabel: tt("modpacks.backups.beforeUpdate.askConfirm"),
+        cancelLabel: tt("modpacks.backups.beforeUpdate.askSkip"),
+      });
+      if (!wantsBackup) return true;
+    }
+    showNotification("info", tt("modpacks.editor.backingUp"), { sound: false });
+    try {
+      await invoke("create_profile_backup", { profileId, kind: "pre_update" });
+      return true;
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : typeof e === "string" ? e : String(e);
+      showNotification("error", tt("modpacks.backups.beforeUpdate.failed", { msg }));
+      return false;
+    }
+  }
+
+  async function handleCheckContentUpdates() {
+    if (!selectedProfile) return;
+    const category =
+      contentTab === "mods"
+        ? "mods"
+        : contentTab === "resourcepacks"
+          ? "resourcepacks"
+          : "shaderpacks";
+    setContentUpdatesChecking(true);
+    try {
+      const updates = await invoke<ProfileContentUpdate[]>("check_profile_content_updates", {
+        profileId: selectedProfile.id,
+        category,
+      });
+      setContentUpdates(updates);
+      if (category === "mods") {
+        setContentUpdatesAvailableFilenames(new Set(updates.map((u) => u.filename)));
+      }
+      if (updates.length === 0) {
+        showNotification("info", tt("modpacks.contentUpdates.noneFound"));
+        return;
+      }
+      setSelectedContentUpdateFilenames(new Set(updates.map((u) => u.filename)));
+      setIsContentUpdatesModalOpen(true);
+      showNotification(
+        "info",
+        tt("modpacks.contentUpdates.found", { count: updates.length }),
+      );
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : typeof e === "string" ? e : String(e);
+      showNotification("error", tt("modpacks.contentUpdates.checkFailed", { msg }));
+    } finally {
+      setContentUpdatesChecking(false);
+    }
+  }
+
+  async function handleApplyContentUpdates(updateAll: boolean) {
+    if (!selectedProfile) return;
+    const category =
+      contentTab === "mods"
+        ? "mods"
+        : contentTab === "resourcepacks"
+          ? "resourcepacks"
+          : "shaderpacks";
+    const selected = updateAll
+      ? contentUpdates
+      : contentUpdates.filter((u) => selectedContentUpdateFilenames.has(u.filename));
+    if (selected.length === 0) {
+      showNotification("warning", tt("modpacks.contentUpdates.selectAtLeastOne"));
+      return;
+    }
+    setContentUpdatesApplying(true);
+    try {
+      if (!(await backupBeforeUpdate(selectedProfile.id))) return;
+      const payload = selected.map((u) => ({
+        filename: u.filename,
+        enabled: u.enabled,
+        latestUrl: u.latestUrl,
+        latestFilename: u.latestFilename,
+        latestSha1: u.latestSha1 ?? null,
+      }));
+      const result = await invoke<ApplyContentUpdatesResult>("apply_profile_content_updates", {
+        profileId: selectedProfile.id,
+        category,
+        updates: payload,
+      });
+      const failedNames = new Set(result.failed.map((f) => f.filename));
+      if (result.failed.length === 0) {
+        showNotification("success", tt("modpacks.contentUpdates.applied", { count: result.applied }));
+        setIsContentUpdatesModalOpen(false);
+      } else {
+        showNotification(
+          "warning",
+          tt("modpacks.contentUpdates.appliedPartial", {
+            count: result.applied,
+            failed: result.failed.length,
+            msg: result.failed[0].error,
+          }),
+        );
+      }
+      const selectedNames = new Set(selected.map((u) => u.filename));
+      setContentUpdates((prev) =>
+        prev.filter((u) => !selectedNames.has(u.filename) || failedNames.has(u.filename)),
+      );
+      setSelectedContentUpdateFilenames(failedNames);
+      if (category === "mods") {
+        setContentUpdatesAvailableFilenames((prev) => {
+          const next = new Set(prev);
+          for (const name of selectedNames) {
+            if (!failedNames.has(name)) next.delete(name);
+          }
+          return next;
+        });
+      }
+      await refreshItems(selectedProfile.id, contentTab);
+      await refreshContentSnapshot();
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : typeof e === "string" ? e : String(e);
+      showNotification("error", tt("modpacks.contentUpdates.applyFailed", { msg }));
+    } finally {
+      setContentUpdatesApplying(false);
+    }
+  }
+
+  async function handleUpdateSingleItem(item: ProfileItemEntry) {
+    if (!selectedProfile) return;
+    const category =
+      contentTab === "mods"
+        ? "mods"
+        : contentTab === "resourcepacks"
+          ? "resourcepacks"
+          : "shaderpacks";
+
+    setContentUpdatesSingleApplyingFilename(item.name);
+    try {
+      const updates = await invoke<ProfileContentUpdate[]>("check_profile_content_updates", {
+        profileId: selectedProfile.id,
+        category,
+      });
+      const update = updates.find((u) => u.filename === item.name);
+      if (!update) {
+        setContentUpdatesAvailableFilenames((prev) => {
+          if (!prev.has(item.name)) return prev;
+          const next = new Set(prev);
+          next.delete(item.name);
+          return next;
+        });
+        showNotification("info", tt("modpacks.contentUpdates.noneFoundForItem"));
+        return;
+      }
+
+      if (!(await backupBeforeUpdate(selectedProfile.id))) return;
+
+      const result = await invoke<ApplyContentUpdatesResult>("apply_profile_content_updates", {
+        profileId: selectedProfile.id,
+        category,
+        updates: [
+          {
+            filename: update.filename,
+            enabled: update.enabled,
+            latestUrl: update.latestUrl,
+            latestFilename: update.latestFilename,
+            latestSha1: update.latestSha1 ?? null,
+          },
+        ],
+      });
+
+      showNotification("success", tt("modpacks.contentUpdates.applied", { count: result.applied }));
+      await refreshItems(selectedProfile.id, contentTab);
+      await refreshContentSnapshot();
+      setContentUpdatesAvailableFilenames((prev) => {
+        if (!prev.has(item.name)) return prev;
+        const next = new Set(prev);
+        next.delete(item.name);
+        return next;
+      });
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : typeof e === "string" ? e : String(e);
+      showNotification("error", tt("modpacks.contentUpdates.applyFailed", { msg }));
+    } finally {
+      setContentUpdatesSingleApplyingFilename(null);
+    }
+  }
+
+  async function handleRollbackContentUpdate() {
+    if (!selectedProfile || !contentSnapshot) return;
+    const ok = await confirmDialog({
+      message: tt("modpacks.contentUpdates.rollbackConfirm", {
+        count: contentSnapshot.items.length,
+      }),
+      confirmLabel: tt("modpacks.contentUpdates.rollbackConfirmLabel"),
+    });
+    if (!ok) return;
+    setContentRollbackBusy(true);
+    try {
+      const restored = await invoke<number>("restore_content_snapshot", {
+        profileId: selectedProfile.id,
+        snapshotId: contentSnapshot.id,
+      });
+      showNotification("success", tt("modpacks.contentUpdates.rollbackDone", { count: restored }));
+      await refreshItems(selectedProfile.id, contentTab);
+      await refreshContentSnapshot();
+      void refreshModUpdateBadges(selectedProfile.id);
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : typeof e === "string" ? e : String(e);
+      showNotification("error", tt("modpacks.contentUpdates.rollbackFailed", { msg }));
+    } finally {
+      setContentRollbackBusy(false);
+    }
+  }
+
+  return {
+    contentSnapshot,
+    contentRollbackBusy,
+    handleRollbackContentUpdate,
+    contentUpdates,
+    contentUpdatesChecking,
+    contentUpdatesApplying,
+    contentUpdatesSingleApplyingFilename,
+    isContentUpdatesModalOpen,
+    setIsContentUpdatesModalOpen,
+    selectedContentUpdateFilenames,
+    setSelectedContentUpdateFilenames,
+    applyContentUpdatesAfterVersionChange,
+    handleCheckContentUpdates,
+    handleApplyContentUpdates,
+    handleUpdateSingleItem,
+  };
+}

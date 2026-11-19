@@ -1,0 +1,79 @@
+use serde::Serialize;
+
+pub const EVENT_DOWNLOAD_PROGRESS: &str = "download-progress";
+pub const EVENT_GAME_CONSOLE_LINE: &str = "game-console-line";
+pub const EVENT_MRPACK_IMPORT_PROGRESS: &str = "mrpack-import-progress";
+pub const EVENT_CURSEFORGE_INSTALL_PROGRESS: &str = "curseforge-install-progress";
+pub const EVENT_EXTERNAL_IMPORT_PROGRESS: &str = "external-import-progress";
+pub const EVENT_PLAYTIME_UPDATED: &str = "playtime-updated";
+pub const EVENT_GAME_STATS_DELTA: &str = "game-stats-delta";
+pub const EVENT_LAST_PLAYED_UPDATED: &str = "last-played-updated";
+pub const EVENT_GAME_PROCESS_EXITED: &str = "game-process-exited";
+pub const EVENT_ACTIVE_ACCOUNT_CHANGED: &str = "active-account-changed";
+pub const EVENT_LAUNCH_STAGE: &str = "launch-stage";
+
+#[derive(Debug, Serialize, Clone)]
+pub struct LaunchStagePayload {
+    pub stage: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct MrpackImportProgressPayload {
+    pub phase: String,
+    pub current: Option<u32>,
+    pub total: Option<u32>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct CurseforgeInstallProgressPayload {
+    pub phase: String,
+    pub current: Option<u32>,
+    pub total: Option<u32>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ExternalImportProgressPayload {
+    pub phase: String,
+    pub current: Option<u32>,
+    pub total: Option<u32>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct GameConsoleLinePayload {
+    pub line: String,
+    pub source: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct PlaytimeUpdatedPayload {
+    pub profile_id: String,
+    pub delta_seconds: u64,
+    pub total_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct GameStatsDeltaPayload {
+    pub stats: std::collections::BTreeMap<String, i64>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct LastPlayedUpdatedPayload {
+    pub profile_id: String,
+    pub last_played_at: u64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct GameProcessExitedPayload {
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct DownloadProgressPayload {
+    pub version_id: String,
+    pub downloaded: u64,
+    pub total: u64,
+    pub percent: f32,
+}

@@ -1,0 +1,513 @@
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { createPortal } from "react-dom";
+import { InputClearButton } from "../../components/ui";
+import type {
+  CatalogSort,
+  CatalogSourceTab,
+  ContentProvider,
+  LoaderFilter,
+  ModrinthContentType,
+  SideSupport,
+} from "./types";
+
+type Tt = (key: string, vars?: Record<string, string | number>) => string;
+
+type CatalogToolbarProps = {
+  tt: Tt;
+  contentProvider: ContentProvider;
+  onProviderChange: (p: ContentProvider) => void;
+  contentType: ModrinthContentType;
+  onContentTypeChange: (t: ModrinthContentType) => void;
+  contentTypeIndicator: { left: number; width: number };
+  contentTypeTabRefs: React.MutableRefObject<
+    Partial<Record<ModrinthContentType, HTMLButtonElement | null>>
+  >;
+  contentTypeTabsRef: React.RefObject<HTMLDivElement | null>;
+  sourceTab: CatalogSourceTab;
+  onSourceTabChange: (tab: CatalogSourceTab) => void;
+  onClearRecent?: () => void;
+  search: string;
+  onSearchChange: (value: string) => void;
+  gameVersion: string;
+  gameVersions: string[];
+  loader: LoaderFilter;
+  versionLoaderLocked: boolean;
+  isVersionDropdownOpen: boolean;
+  isLoaderDropdownOpen: boolean;
+  setIsVersionDropdownOpen: (v: boolean | ((c: boolean) => boolean)) => void;
+  setIsLoaderDropdownOpen: (v: boolean | ((c: boolean) => boolean)) => void;
+  onGameVersionChange: (v: string) => void;
+  onLoaderChange: (v: LoaderFilter) => void;
+  onRequestUnlock: () => void;
+  onLockedClick: (e: MouseEvent<HTMLButtonElement>) => void;
+  activeProfileId?: string | null;
+  layout: "list" | "grid";
+  onLayoutChange: (layout: "list" | "grid") => void;
+};
+
+export function CatalogToolbar({
+  tt,
+  contentProvider,
+  onProviderChange,
+  contentType,
+  onContentTypeChange,
+  contentTypeIndicator,
+  contentTypeTabRefs,
+  contentTypeTabsRef,
+  sourceTab,
+  onSourceTabChange,
+  onClearRecent,
+  search,
+  onSearchChange,
+  gameVersion,
+  gameVersions,
+  loader,
+  versionLoaderLocked,
+  isVersionDropdownOpen,
+  isLoaderDropdownOpen,
+  setIsVersionDropdownOpen,
+  setIsLoaderDropdownOpen,
+  onGameVersionChange,
+  onLoaderChange,
+  onRequestUnlock,
+  onLockedClick,
+  activeProfileId,
+  layout,
+  onLayoutChange,
+}: CatalogToolbarProps) {
+  return (
+    <div className="relative z-[80] mb-3 mt-2 flex flex-col gap-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="seg-track flex h-10 shrink-0 items-center gap-1 p-1">
+          {(["modrinth", "curseforge"] as ContentProvider[]).map((provider) => (
+            <button
+              key={provider}
+              type="button"
+              onClick={() => onProviderChange(provider)}
+              className={`interactive-press rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors ${
+                contentProvider === provider
+                  ? "seg-on"
+                  : "text-white/70 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              {provider === "modrinth"
+                ? tt("mods.provider.modrinth")
+                : tt("mods.provider.curseforge")}
+            </button>
+          ))}
+        </div>
+        <div
+          ref={contentTypeTabsRef}
+          className="seg-track relative grid h-10 min-w-0 flex-1 grid-cols-4 items-center overflow-hidden p-1"
+        >
+          <div
+            className="pointer-events-none absolute top-1 bottom-1 rounded-md seg-indicator transition-all duration-200 ease-out"
+            style={{
+              left: `${contentTypeIndicator.left}px`,
+              width: `${contentTypeIndicator.width}px`,
+            }}
+          />
+          {(
+            ["mod", "resourcepack", "shader", "modpack"] as ModrinthContentType[]
+          ).map((kind) => {
+            const label =
+              kind === "mod"
+                ? tt("mods.tab.mods")
+                : kind === "resourcepack"
+                  ? tt("mods.tab.resources")
+                  : kind === "shader"
+                    ? tt("mods.tab.shaders")
+                    : tt("mods.tab.modpacks");
+            const active = contentType === kind;
+            return (
+              <button
+                key={kind}
+                type="button"
+                ref={(el) => {
+                  contentTypeTabRefs.current[kind] = el;
+                }}
+                onClick={() => onContentTypeChange(kind)}
+                className={`interactive-press relative z-10 rounded-xl px-2 py-1.5 text-center text-xs font-semibold whitespace-nowrap transition-colors ${
+                  active ? "text-white" : "text-white/70 hover:text-white"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <VersionLoaderControls
+          tt={tt}
+          gameVersion={gameVersion}
+          gameVersions={gameVersions}
+          loader={loader}
+          versionLoaderLocked={versionLoaderLocked}
+          isVersionDropdownOpen={isVersionDropdownOpen}
+          isLoaderDropdownOpen={isLoaderDropdownOpen}
+          setIsVersionDropdownOpen={setIsVersionDropdownOpen}
+          setIsLoaderDropdownOpen={setIsLoaderDropdownOpen}
+          onGameVersionChange={onGameVersionChange}
+          onLoaderChange={onLoaderChange}
+          onRequestUnlock={onRequestUnlock}
+          onLockedClick={onLockedClick}
+          activeProfileId={activeProfileId}
+        />
+      </div>
+
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="seg-track flex h-10 shrink-0 items-center gap-1 p-1">
+          {(
+            [
+              ["catalog", "mods.source.catalog"],
+              ["recent", "mods.source.recent"],
+            ] as [CatalogSourceTab, string][]
+          ).map(([tab, key]) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => onSourceTabChange(tab)}
+              className={`interactive-press rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors ${
+                sourceTab === tab
+                  ? "seg-on"
+                  : "text-white/65 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              {tt(key)}
+            </button>
+          ))}
+        </div>
+        {sourceTab === "recent" && onClearRecent && (
+          <button
+            type="button"
+            onClick={onClearRecent}
+            className="glass-control interactive-press h-10 shrink-0 px-3 text-xs font-semibold text-white/70 hover:bg-white/10 hover:text-white"
+          >
+            {tt("mods.recent.clear")}
+          </button>
+        )}
+        <div className="glass-toolbar field-shell flex h-10 min-w-0 flex-1 items-center gap-2 px-3">
+          <img
+            src="/launcher-assets/search.png"
+            alt=""
+            className="h-4 w-4 shrink-0 object-contain"
+          />
+          <input
+            type="text"
+            data-hotkey-search
+            placeholder={tt("mods.searchPlaceholder")}
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="min-w-0 flex-1 bg-transparent text-xs text-white placeholder:text-white/40 focus:outline-none"
+          />
+          <InputClearButton
+            value={search}
+            onClear={() => onSearchChange("")}
+            aria-label={tt("common.clear")}
+          />
+        </div>
+        <div className="flex h-10 shrink-0 items-center gap-1 rounded-2xl border border-white/15 bg-black/40 p-1">
+          <button
+            type="button"
+            onClick={() => onLayoutChange("list")}
+            className={`interactive-press rounded-xl p-1.5 ${
+              layout === "list"
+                ? "seg-on"
+                : "text-white/70 hover:bg-white/10"
+            }`}
+            title={tt("mods.layout.list")}
+          >
+            <img
+              src={
+                layout === "list"
+                  ? "/launcher-assets/list-black.png"
+                  : "/launcher-assets/list.png"
+              }
+              alt=""
+              className="h-4 w-4 object-contain"
+            />
+          </button>
+          <button
+            type="button"
+            onClick={() => onLayoutChange("grid")}
+            className={`interactive-press rounded-xl p-1.5 ${
+              layout === "grid"
+                ? "seg-on"
+                : "text-white/70 hover:bg-white/10"
+            }`}
+            title={tt("mods.layout.grid")}
+          >
+            <img
+              src={
+                layout === "grid"
+                  ? "/launcher-assets/grid-black.png"
+                  : "/launcher-assets/grid.png"
+              }
+              alt=""
+              className="h-4 w-4 object-contain"
+            />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const DROPDOWN_MENU_CLASS =
+  "custom-scrollbar max-h-64 overflow-y-auto rounded-2xl border border-white/10 bg-[#121212] p-1 text-xs shadow-soft";
+
+function AnchoredDropdown({
+  open,
+  anchorRef,
+  onClose,
+  widthClass,
+  children,
+}: {
+  open: boolean;
+  anchorRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  widthClass: string;
+  children: ReactNode;
+}) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 0 });
+
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setPos({
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+      });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open, anchorRef]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (anchorRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      onClose();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, anchorRef, onClose]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className={`fixed z-[1000] ${widthClass} ${DROPDOWN_MENU_CLASS}`}
+      style={{ top: pos.top, left: pos.left, minWidth: pos.width }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
+function VersionLoaderControls({
+  tt,
+  gameVersion,
+  gameVersions,
+  loader,
+  versionLoaderLocked,
+  isVersionDropdownOpen,
+  isLoaderDropdownOpen,
+  setIsVersionDropdownOpen,
+  setIsLoaderDropdownOpen,
+  onGameVersionChange,
+  onLoaderChange,
+  onRequestUnlock,
+  onLockedClick,
+  activeProfileId,
+}: {
+  tt: Tt;
+  gameVersion: string;
+  gameVersions: string[];
+  loader: LoaderFilter;
+  versionLoaderLocked: boolean;
+  isVersionDropdownOpen: boolean;
+  isLoaderDropdownOpen: boolean;
+  setIsVersionDropdownOpen: (v: boolean | ((c: boolean) => boolean)) => void;
+  setIsLoaderDropdownOpen: (v: boolean | ((c: boolean) => boolean)) => void;
+  onGameVersionChange: (v: string) => void;
+  onLoaderChange: (v: LoaderFilter) => void;
+  onRequestUnlock: () => void;
+  onLockedClick: (e: MouseEvent<HTMLButtonElement>) => void;
+  activeProfileId?: string | null;
+}): ReactNode {
+  const versionButtonRef = useRef<HTMLButtonElement | null>(null);
+  const loaderButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  return (
+    <div className="glass-toolbar relative ml-auto flex h-10 shrink-0 items-center gap-2 px-3">
+      <span className="mr-1 text-[0.8125rem] text-gray-400">
+        {tt("mods.version")}
+      </span>
+      <div className="relative">
+        <button
+          ref={versionButtonRef}
+          type="button"
+          onClick={(e) => {
+            if (versionLoaderLocked) onLockedClick(e);
+            else setIsVersionDropdownOpen((c) => !c);
+          }}
+          aria-disabled={versionLoaderLocked}
+          className={`interactive-press glass-control inline-flex min-w-[88px] items-center gap-2 rounded-xl px-3 py-1 text-xs font-semibold text-white ${
+            versionLoaderLocked
+              ? "cursor-not-allowed border-warn-hi/30 text-white/75"
+              : "hover:border-white/20"
+          }`}
+        >
+          <span className="truncate">
+            {gameVersion || tt("mods.loaderAny")}
+          </span>
+          {versionLoaderLocked ? (
+            <span className="text-warn-fg/90"><svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg></span>
+          ) : (
+            <span className="text-[0.75rem] text-gray-400">▾</span>
+          )}
+        </button>
+        <AnchoredDropdown
+          open={isVersionDropdownOpen && gameVersions.length > 0}
+          anchorRef={versionButtonRef}
+          onClose={() => setIsVersionDropdownOpen(false)}
+          widthClass="w-32"
+        >
+          <button
+            type="button"
+            onClick={() => {
+              onGameVersionChange("");
+              setIsVersionDropdownOpen(false);
+            }}
+            className={`interactive-press flex w-full items-center justify-between rounded-xl px-3 py-1.5 text-left transition-colors ${
+              !gameVersion
+                ? "seg-on font-semibold"
+                : "text-white hover:bg-white/10"
+            }`}
+          >
+            <span>{tt("mods.loaderAny")}</span>
+          </button>
+          {gameVersions.map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => {
+                onGameVersionChange(v);
+                setIsVersionDropdownOpen(false);
+              }}
+              className={`interactive-press flex w-full items-center justify-between rounded-xl px-3 py-1.5 text-left transition-colors ${
+                gameVersion === v
+                  ? "seg-on font-semibold"
+                  : "text-white hover:bg-white/10"
+              }`}
+            >
+              <span>{v}</span>
+            </button>
+          ))}
+        </AnchoredDropdown>
+      </div>
+      <div className="relative">
+        <button
+          ref={loaderButtonRef}
+          type="button"
+          onClick={(e) => {
+            if (versionLoaderLocked) onLockedClick(e);
+            else setIsLoaderDropdownOpen((c) => !c);
+          }}
+          aria-disabled={versionLoaderLocked}
+          className={`interactive-press glass-control inline-flex min-w-[96px] items-center gap-2 rounded-xl px-3 py-1 text-xs font-semibold text-white ${
+            versionLoaderLocked
+              ? "cursor-not-allowed border-warn-hi/30 text-white/75"
+              : "hover:border-white/20"
+          }`}
+        >
+          <span>
+            {loader === "any"
+              ? tt("mods.loaderAny")
+              : loader === "forge"
+                ? "Forge"
+                : loader === "fabric"
+                  ? "Fabric"
+                  : loader === "quilt"
+                    ? "Quilt"
+                    : "NeoForge"}
+          </span>
+          {versionLoaderLocked ? (
+            <span className="text-warn-fg/90"><svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg></span>
+          ) : (
+            <span className="text-[0.75rem] text-gray-400">▾</span>
+          )}
+        </button>
+        {versionLoaderLocked && activeProfileId && (
+          <button
+            type="button"
+            onClick={onRequestUnlock}
+            className="interactive-press ml-1 rounded-xl bg-warn-line/20 px-3 py-1 text-[0.8125rem] font-semibold text-warn-fg hover:bg-warn-line/30"
+          >
+            {tt("common.change")}
+          </button>
+        )}
+        <AnchoredDropdown
+          open={isLoaderDropdownOpen}
+          anchorRef={loaderButtonRef}
+          onClose={() => setIsLoaderDropdownOpen(false)}
+          widthClass="w-36"
+        >
+          {[
+            { id: "forge" as const, label: "Forge" },
+            { id: "fabric" as const, label: "Fabric" },
+            { id: "quilt" as const, label: "Quilt" },
+            { id: "neoforge" as const, label: "NeoForge" },
+            { id: "any" as const, label: tt("mods.loaderAll") },
+          ].map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => {
+                onLoaderChange(opt.id);
+                setIsLoaderDropdownOpen(false);
+              }}
+              className={`interactive-press flex w-full items-center justify-between rounded-xl px-3 py-1.5 text-left transition-colors ${
+                loader === opt.id
+                  ? "seg-on font-semibold"
+                  : "text-white hover:bg-white/10"
+              }`}
+            >
+              <span>{opt.label}</span>
+            </button>
+          ))}
+        </AnchoredDropdown>
+      </div>
+    </div>
+  );
+}
+
+export type { CatalogSort, SideSupport };

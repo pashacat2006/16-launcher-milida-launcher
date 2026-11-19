@@ -1,0 +1,1628 @@
+use std::io::ErrorKind;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use tauri::{AppHandle, Emitter, Manager};
+
+use crate::app::paths::{game_root_dir, launcher_data_dir, libraries_dir, versions_dir};
+use crate::infra::http::http_client;
+use crate::infra::network::is_online;
+use crate::infra::process::hide_console;
+use crate::models::events::{
+    GameConsoleLinePayload, GameProcessExitedPayload, LastPlayedUpdatedPayload, LaunchStagePayload,
+    PlaytimeUpdatedPayload, EVENT_ACTIVE_ACCOUNT_CHANGED, EVENT_GAME_CONSOLE_LINE,
+    EVENT_GAME_PROCESS_EXITED, EVENT_LAST_PLAYED_UPDATED, EVENT_LAUNCH_STAGE, EVENT_PLAYTIME_UPDATED,
+};
+use crate::services::game::console::for_each_output_line;
+use crate::services::game::console_filter::is_game_console_line_important;
+use crate::services::auth::ely::{ensure_authlib_injector, refresh_ely_session_internal, ELY_CLIENT_ID};
+use crate::services::auth::microsoft::MS_CLIENT_ID;
+use crate::services::game::accounts::{activate_instance_account, get_profile, save_full_profile};
+use crate::services::game::arguments::{
+    resolve_arguments, strip_legacy_server_args, strip_quick_play_game_args,
+};
+use crate::services::game::core::{
+    compare_version_like, current_os_name, download_text_with_retries, ensure_fabric_intermediary_library,
+    fabric_library_path,
+    file_len_matches, is_probably_native_jar_path, library_applies, os_info, parse_library_coords,
+    resolve_native_artifact,
+};
+use crate::services::game::console::log_to_console;
+use crate::services::game::continue_target::{quick_play_log_path, record_server_join, QUICK_PLAY_DIR};
+use crate::services::game::nickname::launch_nickname;
+use crate::services::game::profiles::{
+    finish_playtime_session, flush_active_playtime, load_selected_instance_settings,
+    read_selected_profile_id, record_profile_last_played, selected_instance_dir,
+    start_playtime_session,
+};
+use crate::services::game::runtime::{
+    build_java_command, ensure_forge_ignore_list_includes_vanilla_client_jar,
+    ensure_forge_safe_opens, ensure_lwjgl_fallback_for_modern_versions, ensure_library_artifacts_present_for_launch,
+    ensure_ms_minecraft_session, extract_natives_jar, filter_forge_problematic_jvm_args,
+    validate_mc_access_token, MS_NO_JAVA_PROFILE_ERR,
+    filter_launcher_owned_jvm_args, natives_dir_has_files,
+    offline_uuid_from_username, remove_add_opens_for_java_under_9, resolve_client_jar_path,
+    resolve_natives_dir_for_launch, fallback_java_runtime_for_mc_version, resolve_natives_extract_dir,
+    forge_java_runtime_for_mc_version, uses_natives_subdirectories, download_file_checked,
+    ensure_assets_for_launch,
+};
+use crate::services::game::launch_hooks;
+use crate::services::game::launcher::process::{is_our_game_process_alive, max_heap_from_args};
+use crate::services::game::launcher::session::{forget_game_session, remember_game_session};
+use crate::services::game::runtime::{clear_game_lan_port, observe_game_log_line};
+use crate::services::game::run_history::RunRecorder;
+use crate::services::game::settings as settings_service;
+use crate::services::game::state::{
+    DEFAULT_DOWNLOAD_RETRIES, GAME_PROCESS_MAX_HEAP_BYTES, GAME_PROCESS_PID, LIBRARIES_BASE, REOPEN_LAUNCHER_ON_GAME_EXIT,
+};
+use crate::services::game::version_types::*;
+use crate::services::game::versions::get_mojang_version_url;
+
+const ELY_AUTHLIB_INJECTOR_TARGET: &str = "ely.by";
+
+fn emit_launch_stage(app: &AppHandle, stage: &str) {
+    let _ = app.emit(
+        EVENT_LAUNCH_STAGE,
+        LaunchStagePayload {
+            stage: stage.to_string(),
+        },
+    );
+}
+
+const FRIEND_WORLD_OFFLINE_ERR: &str = "Войти в мир друга нельзя в офлайн-режиме. Войдите через Microsoft или Ely на вкладке Аккаунты.";
+const FRIEND_WORLD_NO_NETWORK_ERR: &str = "Войти в мир друга без интернета нельзя. Проверьте подключение к сети.";
+
+fn format_game_args_for_dump(args: &[String]) -> String {
+    let mut lines = Vec::with_capacity(args.len());
+    let mut i = 0usize;
+    while i < args.len() {
+        let a = &args[i];
+        let redact_next = matches!(
+            a.as_str(),
+            "--accessToken" | "--session" | "--sessionId" | "--userProperties"
+        );
+        lines.push(format!("  {a}"));
+        if redact_next && i + 1 < args.len() && !args[i + 1].starts_with('-') {
+            let val = &args[i + 1];
+            let has = !val.is_empty() && val != "offline" && val != "0";
+            lines.push(format!("  <redacted has_value={has}>"));
+            i += 2;
+            continue;
+        }
+        if a.starts_with("token:") {
+            lines.pop();
+            lines.push("  <redacted session-token>".to_string());
+        }
+        i += 1;
+    }
+    lines.join("\n")
+}
+
+fn write_launch_auth_dump(
+    game_dir: &std::path::Path,
+    version_id: &str,
+    server_address: &Option<String>,
+    auth_mode: &str,
+    user_type: &str,
+    has_access_token: bool,
+    authlib_injector: bool,
+    note: &str,
+) {
+    let dump = format!(
+        "version_id={version_id}\nserver_address={server_address:?}\nauth_mode={auth_mode}\nuser_type={user_type}\nhas_access_token={has_access_token}\nauthlib_injector={authlib_injector}\nnote={note}\n"
+    );
+    let mut dump_paths = vec![game_dir.join("mc16-last-launch-args.txt")];
+    if let Ok(data) = launcher_data_dir() {
+        dump_paths.push(data.join("mc16-last-launch-args.txt"));
+    }
+    if let Ok(root) = game_root_dir() {
+        let p = root.join("mc16-last-launch-args.txt");
+        if !dump_paths.contains(&p) {
+            dump_paths.push(p);
+        }
+    }
+    for dump_path in &dump_paths {
+        if let Err(e) = std::fs::write(dump_path, &dump) {
+            eprintln!("[Launch] failed to write {}: {e}", dump_path.display());
+        }
+    }
+}
+
+fn apply_ms_session(
+    auth_name: &mut String,
+    auth_uuid: &mut String,
+    auth_token: &mut String,
+    user_type: &mut String,
+    auth_is_mojang: &mut bool,
+    auth_uuid_nodash: &mut String,
+    legacy_session: &mut String,
+    mc_name: String,
+    mc_uuid: String,
+    mc_access_token: String,
+) {
+    *auth_name = mc_name;
+    *auth_uuid = dashed_uuid(&mc_uuid);
+    *auth_token = mc_access_token;
+    *user_type = "msa".to_string();
+    *auth_is_mojang = true;
+    *auth_uuid_nodash = auth_uuid.replace('-', "");
+    *legacy_session = format!("token:{}:{}", auth_token, auth_uuid_nodash);
+}
+
+fn dashed_uuid(uuid: &str) -> String {
+    if uuid.len() != 32 || !uuid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return uuid.to_string();
+    }
+    format!(
+        "{}-{}-{}-{}-{}",
+        &uuid[0..8],
+        &uuid[8..12],
+        &uuid[12..16],
+        &uuid[16..20],
+        &uuid[20..32]
+    )
+}
+
+fn split_server_address(addr: &str) -> (String, String) {
+    if let Some((host, port)) = addr.rsplit_once(':') {
+        if !host.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+            return (host.to_string(), port.to_string());
+        }
+    }
+    (addr.to_string(), "25565".to_string())
+}
+
+pub(crate) fn version_supports_quick_play(version_id: &str, jar_version: &str) -> bool {
+    fn major_minor(v: &str) -> Option<(u32, u32)> {
+        let mut parts = v.trim().split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next().unwrap_or("0").parse().ok()?;
+        Some((major, minor))
+    }
+    for candidate in [jar_version, version_id] {
+        let head = candidate.split('-').next().unwrap_or(candidate);
+        if let Some((major, minor)) = major_minor(head) {
+            return major > 1 || (major == 1 && minor >= 20);
+        }
+    }
+    false
+}
+
+async fn load_parent_version_detail(
+    vers_root: &std::path::Path,
+    parent_id: &str,
+) -> Result<VersionDetail, String> {
+    let path = vers_root.join(parent_id).join(format!("{parent_id}.json"));
+    if let Ok(text) = tokio::fs::read_to_string(&path).await {
+        match serde_json::from_str::<VersionDetail>(&text) {
+            Ok(d) => return Ok(d),
+            Err(e) => eprintln!("[Launch] Повреждён {}: {e} — берём из сети", path.display()),
+        }
+    }
+    let url = get_mojang_version_url(parent_id).await.map_err(|e| {
+        format!("Базовая версия {parent_id} не найдена локально и недоступна в сети: {e}")
+    })?;
+    let client = http_client(false);
+    let text = download_text_with_retries(&client, &url, DEFAULT_DOWNLOAD_RETRIES).await?;
+    let detail: VersionDetail = serde_json::from_str(&text)
+        .map_err(|e| format!("Ошибка разбора версии {parent_id}: {e}"))?;
+    let _ = crate::infra::fs_atomic::write_atomic(&path, text.as_bytes());
+    Ok(detail)
+}
+
+#[tauri::command]
+pub async fn launch_game(
+    app: AppHandle,
+    version_id: String,
+    version_url: Option<String>,
+    server_address: Option<String>,
+    world_name: Option<String>,
+) -> Result<(), String> {
+    launch_game_impl(app, version_id, version_url, server_address, world_name, None).await
+}
+
+pub(crate) async fn launch_game_impl(
+    app: AppHandle,
+    version_id: String,
+    version_url: Option<String>,
+    server_address: Option<String>,
+    world_name: Option<String>,
+    bridge: Option<crate::bridge::LaunchAuth>,
+) -> Result<(), String> {
+    let root = game_root_dir()?;
+    let libs_root = libraries_dir()?;
+    let vers_root = versions_dir()?;
+    let playtime_profile_id = read_selected_profile_id();
+    let game_dir = selected_instance_dir().unwrap_or_else(|| root.clone());
+    // Millida owns the session and its fallback policy. The bridge must try real
+    // requests rather than infer global connectivity from 16's HEAD probes.
+    let online = bridge.is_some() || is_online().await;
+
+    if let (None, Ok(Some((_, inst)))) = (bridge.as_ref(), load_selected_instance_settings()) {
+        if let Some(account_id) = inst.account_id.as_deref() {
+            match activate_instance_account(account_id) {
+                Ok(true) => {
+                    let _ = app.emit(EVENT_ACTIVE_ACCOUNT_CHANGED, account_id);
+                }
+                Ok(false) => eprintln!("[Launch] Аккаунт сборки {account_id} не найден, берём активный"),
+                Err(e) => eprintln!("[Launch] Не удалось выбрать аккаунт сборки: {e}"),
+            }
+        }
+    }
+
+    emit_launch_stage(&app, "version");
+    let (mut detail, is_fabric) = if let Some(ref url) = version_url {
+        let local_json = vers_root.join(&version_id).join(format!("{version_id}.json"));
+        let local = tokio::fs::read_to_string(&local_json)
+            .await
+            .ok()
+            .and_then(|s| serde_json::from_str::<VersionDetail>(&s).ok());
+        let d = match local {
+            Some(d) => d,
+            None => {
+                let client = http_client(false);
+                let text = download_text_with_retries(&client, url, DEFAULT_DOWNLOAD_RETRIES).await?;
+                serde_json::from_str(&text)
+                    .map_err(|e| format!("Ошибка разбора описания версии: {e}"))?
+            }
+        };
+        (d, false)
+    } else {
+        let version_json = vers_root.join(&version_id).join(format!("{version_id}.json"));
+        let profile_path = vers_root.join(&version_id).join("profile.json");
+        if version_json.exists() {
+            let s = tokio::fs::read_to_string(&version_json)
+                .await
+                .map_err(|e| format!("Ошибка чтения version.json: {e}"))?;
+            let d: VersionDetail = serde_json::from_str(&s)
+                .map_err(|e| format!("Ошибка разбора version.json: {e}"))?;
+            (d, false)
+        } else if profile_path.exists() {
+            let s = tokio::fs::read_to_string(&profile_path)
+                .await
+                .map_err(|e| format!("Ошибка чтения profile.json: {e}"))?;
+            let profile: FabricProfile = serde_json::from_str(&s)
+                .map_err(|e| format!("Ошибка разбора profile.json: {e}"))?;
+            let mojang_detail =
+                load_parent_version_detail(&vers_root, &profile.inherits_from).await?;
+            let mut detail = VersionDetail {
+                downloads: None,
+                inherits_from: Some(profile.inherits_from.clone()),
+                main_class: profile.main_class,
+                libraries: Vec::new(),
+                arguments: VersionArguments {
+                    jvm: profile.arguments.jvm,
+                    game: Vec::new(),
+                },
+                minecraft_arguments: None,
+                asset_index: mojang_detail.asset_index,
+                assets: mojang_detail.assets.clone(),
+                java_version: mojang_detail.java_version.clone(),
+            };
+            for lib in &profile.libraries {
+                let path = fabric_library_path(&lib.name);
+                detail.libraries.push(Library {
+                    name: lib.name.clone(),
+                    downloads: LibraryDownloads {
+                        artifact: Some(LibraryArtifact {
+                            path: path.clone(),
+                            url: format!("https://maven.fabricmc.net/{path}"),
+                            sha1: None,
+                            size: lib.size,
+                        }),
+                        classifiers: None,
+                    },
+                    rules: vec![],
+                    extract: None,
+                    natives: None,
+                });
+            }
+            ensure_fabric_intermediary_library(&mut detail.libraries, &profile.inherits_from);
+            (detail, true)
+        } else {
+            return Err("Версия не установлена или не найдена. Сначала установите.".to_string());
+        }
+    };
+
+        let mut effective_jar_version = version_id.clone();
+    if let Some(parent_id) = detail.inherits_from.clone() {
+        effective_jar_version = parent_id.clone();
+        let parent_detail = load_parent_version_detail(&vers_root, &parent_id).await?;
+
+        let mut merged_libs = parent_detail.libraries.clone();
+        merged_libs.extend(detail.libraries.clone());
+        let mut merged_args = parent_detail.arguments.clone();
+        merged_args.jvm.extend(detail.arguments.jvm.clone());
+        merged_args.game.extend(detail.arguments.game.clone());
+
+        detail.downloads = parent_detail.downloads;
+        detail.asset_index = detail.asset_index.clone().or(parent_detail.asset_index);
+        detail.assets = detail.assets.clone().or(parent_detail.assets);
+        detail.java_version = detail.java_version.clone().or(parent_detail.java_version);
+        detail.libraries = merged_libs;
+        detail.arguments = merged_args;
+    }
+
+    let inherits_for_jar = detail.inherits_from.as_deref();
+    let jar_path = resolve_client_jar_path(&root, &vers_root, &version_id, inherits_for_jar)
+        .unwrap_or_else(|| root.join(format!("{effective_jar_version}.jar")));
+    if let Some(client_dl) = detail.downloads.as_ref().map(|d| &d.client) {
+        let size_ok = client_dl.size == 0 || file_len_matches(&jar_path, client_dl.size);
+        if !size_ok && !online && jar_path.is_file() {
+            log_to_console(
+                &app,
+                &format!("[Launch] Размер client.jar не совпал, без интернета запускаем как есть: {}", jar_path.display()),
+            );
+        } else if !size_ok {
+            log_to_console(
+                &app,
+                &format!("[Launch] client.jar отсутствует или повреждён, восстанавливаем: {}", jar_path.display()),
+            );
+            let _ = tokio::fs::remove_file(&jar_path).await;
+            let client = http_client(false);
+            let total_done = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            download_file_checked(
+                &client,
+                &client_dl.url,
+                &jar_path,
+                client_dl.sha1.clone(),
+                &app,
+                &version_id,
+                client_dl.size,
+                total_done,
+                DEFAULT_DOWNLOAD_RETRIES,
+            )
+            .await
+            .map_err(|e| {
+                let dir = jar_path.parent().unwrap_or(&jar_path).display();
+                if e.contains("os error 5") {
+                    format!(
+                        "Не удалось восстановить client.jar: нет прав на запись в папку «{dir}» ({e}). \
+                         Выберите другую папку игры в настройках или проверьте права и антивирус."
+                    )
+                } else {
+                    format!("Не удалось восстановить client.jar ({e}). Переустановите версию.")
+                }
+            })?;
+        }
+    }
+    if detail.downloads.is_some() && !jar_path.is_file() {
+        return Err("Версия не установлена. Сначала нажмите «Установить».".to_string());
+    }
+    if is_fabric && !jar_path.is_file() {
+        let base = inherits_for_jar.unwrap_or(&version_id);
+        return Err(format!(
+            "Не найден client.jar для Fabric (ожидался «{base}.jar» или «{version_id}.jar» в папке игры). Переустановите версию."
+        ));
+    }
+
+    let os_name = current_os_name();
+    let os_info = os_info();
+    let join_address = server_address
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let supports_quick_play = version_supports_quick_play(&version_id, &effective_jar_version);
+    let join_world = world_name
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && join_address.is_none());
+    if join_world.is_some() && !supports_quick_play {
+        return Err("Сразу открыть мир можно только в Minecraft 1.20 и новее.".to_string());
+    }
+
+    eprintln!(
+        "[Launch] server_address(raw)={:?} join_address={:?}",
+        server_address, join_address
+    );
+
+    let features = if join_address.is_some() && supports_quick_play {
+        GameFeatures::for_multiplayer_join()
+    } else {
+        GameFeatures::full()
+    };
+
+    emit_launch_stage(&app, "libraries");
+    let is_forge = is_forge_profile(&version_id, &detail.main_class, &detail.libraries);
+    ensure_library_artifacts_present_for_launch(
+        &app,
+        &version_id,
+        &libs_root,
+        &detail.libraries,
+        os_name,
+    )
+    .await?;
+
+    let mut classpath = Vec::new();
+    let mut seen_paths = std::collections::HashSet::<String>::new();
+    let mut ga_to_index = std::collections::HashMap::<String, usize>::new();
+    let mut ga_to_version = std::collections::HashMap::<String, String>::new();
+    let classpath_includes_natives = uses_natives_subdirectories(&effective_jar_version);
+    for lib in &detail.libraries {
+        if !library_applies(lib, os_name) {
+            continue;
+        }
+        if let Some(ref a) = lib.downloads.artifact {
+            let is_native_jar = is_probably_native_jar_path(&a.path);
+            if is_native_jar && !classpath_includes_natives {
+                continue;
+            }
+            let path = libs_root.join(&a.path);
+            let key = path.to_str().unwrap_or("").replace('\\', "/");
+            if is_native_jar || lib.name.matches(':').count() >= 3 {
+                if seen_paths.insert(key) {
+                    classpath.push(path);
+                }
+                continue;
+            }
+            let ga_key = {
+                let mut parts = lib.name.split(':');
+                match (parts.next(), parts.next()) {
+                    (Some(group), Some(artifact)) if !group.is_empty() && !artifact.is_empty() => {
+                        Some(format!("{group}:{artifact}"))
+                    }
+                    _ => None,
+                }
+            };
+            if let Some(ga_key) = ga_key {
+                if let Some(idx) = ga_to_index.get(&ga_key).copied() {
+                    if seen_paths.insert(key) {
+                        let current_version = ga_to_version.get(&ga_key).cloned().unwrap_or_default();
+                        let new_version = parse_library_coords(&lib.name)
+                            .map(|(_, _, v)| v.to_string())
+                            .unwrap_or_default();
+                        let should_replace = if ga_key.starts_with("org.lwjgl:") {
+                            compare_version_like(&new_version, &current_version)
+                                != std::cmp::Ordering::Less
+                        } else {
+                            true
+                        };
+                        if should_replace {
+                            classpath[idx] = path;
+                            if !new_version.is_empty() {
+                                ga_to_version.insert(ga_key.clone(), new_version);
+                            }
+                        }
+                    }
+                } else if seen_paths.insert(key.clone()) {
+                    if let Some((_, _, version)) = parse_library_coords(&lib.name) {
+                        ga_to_version.insert(ga_key.clone(), version.to_string());
+                    }
+                    ga_to_index.insert(ga_key, classpath.len());
+                    classpath.push(path);
+                }
+            } else if seen_paths.insert(key) {
+                classpath.push(path);
+            }
+        }
+    }
+    if detail.downloads.is_some() || jar_path.is_file() {
+        let jar_key = jar_path.to_str().unwrap_or("").replace('\\', "/");
+        if seen_paths.insert(jar_key) {
+            classpath.push(jar_path.clone());
+        }
+    }
+    ensure_lwjgl_fallback_for_modern_versions(
+        &app,
+        &effective_jar_version,
+        &libs_root,
+        &mut classpath,
+        &mut seen_paths,
+        os_name,
+    )
+    .await?;
+
+    let classpath_str = classpath
+        .iter()
+        .map(|p| p.to_str().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join(if os_name == "windows" { ";" } else { ":" });
+
+    let game_dir_str = game_dir
+        .to_str()
+        .ok_or("Путь к папке игры не в UTF-8")?;
+    if let Err(e) = std::fs::create_dir_all(&game_dir) {
+        return Err(format!(
+            "Не удалось создать папку сборки/игры: {} — {e}",
+            game_dir.display()
+        ));
+    }
+    if is_fabric {
+        let remapped_root = game_dir.join(".fabric").join("remappedJars");
+        if let Err(e) = std::fs::create_dir_all(&remapped_root) {
+            return Err(format!(
+                "Не удалось подготовить папки Fabric (remappedJars): {} — {e}",
+                remapped_root.display()
+            ));
+        }
+    }
+    let natives_dir = vers_root.join(&version_id).join("natives");
+    std::fs::create_dir_all(&natives_dir)
+        .map_err(|e| format!("Не удалось создать папку natives при запуске: {e}"))?;
+    for lib in &detail.libraries {
+        if !library_applies(lib, os_name) {
+            continue;
+        }
+        if let Some(a) = &lib.downloads.artifact {
+            if is_probably_native_jar_path(&a.path) {
+                let path = libs_root.join(&a.path);
+                if path.exists() {
+                    let out_dir =
+                        resolve_natives_extract_dir(&natives_dir, &version_id, &lib.name, &a.path);
+                    let _ = extract_natives_jar(&path, &out_dir);
+                }
+            }
+        }
+        if let Some(nat) = resolve_native_artifact(lib, os_name) {
+            let path = libs_root.join(&nat.path);
+            if path.exists() {
+                let out_dir =
+                    resolve_natives_extract_dir(&natives_dir, &version_id, &lib.name, &nat.path);
+                let _ = extract_natives_jar(&path, &out_dir);
+            }
+        }
+    }
+    let mut has_natives_files = natives_dir_has_files(&natives_dir);
+    if !has_natives_files {
+        let client = http_client(false);
+        for lib in &detail.libraries {
+            if !library_applies(lib, os_name) {
+                continue;
+            }
+            if let Some(a) = &lib.downloads.artifact {
+                if is_probably_native_jar_path(&a.path) {
+                    let path = libs_root.join(&a.path);
+                    if path.exists() {
+                        let out_dir = resolve_natives_extract_dir(
+                            &natives_dir,
+                            &version_id,
+                            &lib.name,
+                            &a.path,
+                        );
+                        let _ = extract_natives_jar(&path, &out_dir);
+                    }
+                }
+            }
+            if let Some(nat) = resolve_native_artifact(lib, os_name) {
+                let path = libs_root.join(&nat.path);
+                if !path.exists() || tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0) == 0 {
+                    if path.exists() {
+                        let _ = tokio::fs::remove_file(&path).await;
+                    }
+                    let nat_url = if !nat.url.trim().is_empty() {
+                        nat.url.clone()
+                    } else {
+                        format!("{}/{}", LIBRARIES_BASE, nat.path)
+                    };
+                    let total_done = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                    download_file_checked(
+                        &client,
+                        &nat_url,
+                        &path,
+                        nat.sha1.clone(),
+                        &app,
+                        &version_id,
+                        0,
+                        total_done,
+                        DEFAULT_DOWNLOAD_RETRIES,
+                    )
+                    .await?;
+                }
+                let out_dir =
+                    resolve_natives_extract_dir(&natives_dir, &version_id, &lib.name, &nat.path);
+                if let Err(e) = extract_natives_jar(&path, &out_dir) {
+                    eprintln!(
+                        "[Launch] Не удалось распаковать natives {}: {e}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        has_natives_files = natives_dir_has_files(&natives_dir);
+    }
+    let natives_dir = if has_natives_files {
+        natives_dir
+    } else {
+        resolve_natives_dir_for_launch(&vers_root, &version_id, detail.inherits_from.as_deref())
+    };
+    let natives_str = natives_dir.to_str().unwrap_or("");
+    let assets_root = root.join("assets");
+    let _ = std::fs::create_dir_all(&assets_root);
+    let mut assets_str_owned = assets_root.to_string_lossy().into_owned();
+    if let Some(ref asset_index) = detail.asset_index {
+        let client = http_client(false);
+        emit_launch_stage(&app, "assets");
+        ensure_assets_for_launch(&client, asset_index, &root, &app, &version_id, &game_dir).await;
+        let legacy = assets_root.join("virtual").join("legacy");
+        let index_is_virtual = std::fs::read_to_string(
+            assets_root.join("indexes").join(format!("{}.json", asset_index.id)),
+        )
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("virtual").and_then(|b| b.as_bool()))
+        .unwrap_or(false);
+        if index_is_virtual && legacy.is_dir() {
+            assets_str_owned = legacy.to_string_lossy().into_owned();
+        }
+    }
+    let assets_str = assets_str_owned.as_str();
+
+    if !online {
+        log_to_console(&app, "[Launch] Нет подключения к интернету, запуск в офлайн-режиме");
+    } else if let Err(e) = if bridge.is_none() { refresh_ely_session_internal().await } else { Ok(()) } {
+        let ely_session_left = get_profile()
+            .map(|p| p.ely_access_token.as_deref().is_some_and(|t| !t.is_empty()))
+            .unwrap_or(false);
+        if !ely_session_left {
+            return Err(e);
+        }
+        eprintln!("[Launch] Не удалось обновить сессию Ely.by, запускаем с текущей: {e}");
+    }
+
+    let profile = if bridge.is_none() { get_profile().unwrap_or_default() } else { Default::default() };
+    let is_friend_world_join = bridge.is_none() && server_address
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    let is_offline = profile
+        .ely_access_token
+        .as_deref()
+        .map(|s| s.is_empty() || s == "0")
+        .unwrap_or(true);
+    let mut auth_name: String = profile
+        .ely_username
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| launch_nickname(&profile.nickname));
+    let mut auth_uuid: String = profile
+        .ely_uuid
+        .as_deref()
+        .map(dashed_uuid)
+        .unwrap_or_else(|| {
+            if is_offline {
+                offline_uuid_from_username(&auth_name)
+            } else {
+                "00000000-0000-0000-0000-000000000000".to_string()
+            }
+        });
+    let mut auth_token: String = profile
+        .ely_access_token
+        .as_deref()
+        .filter(|s| !s.is_empty() && *s != "0")
+        .unwrap_or("offline")
+        .to_string();
+    let mut user_type: String = if is_offline {
+        "legacy".to_string()
+    } else {
+        "mojang".to_string()
+    };
+    let mut auth_is_mojang = false;
+    let mut auth_uuid_nodash: String = auth_uuid.replace('-', "");
+    let mut legacy_session: String = if is_offline {
+        "offline".to_string()
+    } else {
+        format!("token:{}:{}", auth_token, auth_uuid_nodash)
+    };
+
+    let has_valid_ely_session = !is_offline
+        && profile
+            .ely_access_token
+            .as_deref()
+            .map(|s| !s.is_empty() && s != "0")
+            .unwrap_or(false)
+        && profile
+            .ely_uuid
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+
+    if !online {
+        let has_ms_account = [&profile.ms_access_token, &profile.ms_refresh_token]
+            .iter()
+            .any(|t| t.as_deref().is_some_and(|s| !s.is_empty()));
+        if !has_valid_ely_session && has_ms_account {
+            if let (Some(mc_name), Some(mc_uuid)) = (
+                profile.mc_username.as_deref().filter(|s| !s.is_empty()),
+                profile.mc_uuid.as_deref().filter(|s| !s.is_empty()),
+            ) {
+                auth_name = mc_name.to_string();
+                auth_uuid = dashed_uuid(mc_uuid);
+            }
+        }
+        auth_uuid_nodash = auth_uuid.replace('-', "");
+        auth_token = "offline".to_string();
+        user_type = "legacy".to_string();
+        legacy_session = "offline".to_string();
+    } else if !has_valid_ely_session {
+        let has_ms_token = profile
+            .ms_access_token
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        let has_ms_refresh = profile
+            .ms_refresh_token
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        let should_refresh_ms = has_ms_token || has_ms_refresh;
+        let mut ms_refresh_error: Option<String> = None;
+
+        if should_refresh_ms {
+            emit_launch_stage(&app, "account");
+            match ensure_ms_minecraft_session().await {
+                Ok(Some((mc_name, mc_uuid, mc_access_token))) => {
+                    if let Ok(mut p) = get_profile() {
+                        p.mc_username = Some(mc_name.clone());
+                        p.mc_uuid = Some(mc_uuid.clone());
+                        p.mc_access_token = Some(mc_access_token.clone());
+                        let _ = save_full_profile(&p);
+                    }
+                    apply_ms_session(
+                        &mut auth_name,
+                        &mut auth_uuid,
+                        &mut auth_token,
+                        &mut user_type,
+                        &mut auth_is_mojang,
+                        &mut auth_uuid_nodash,
+                        &mut legacy_session,
+                        mc_name,
+                        mc_uuid,
+                        mc_access_token,
+                    );
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("[Launch] ensure_ms_minecraft_session: {e}");
+                    ms_refresh_error = Some(e);
+                    write_launch_auth_dump(
+                        &game_dir,
+                        &version_id,
+                        &server_address,
+                        "microsoft",
+                        "msa",
+                        false,
+                        false,
+                        "ms_refresh_failed_try_validate_cache",
+                    );
+                }
+            }
+        }
+
+        if !auth_is_mojang {
+            if let (Some(mc_name), Some(mc_uuid), Some(mc_access_token)) = (
+                profile.mc_username.as_ref(),
+                profile.mc_uuid.as_ref(),
+                profile.mc_access_token.as_ref(),
+            ) {
+                if !mc_access_token.is_empty() {
+                    let cache_ok = if ms_refresh_error.is_some() {
+                        validate_mc_access_token(mc_access_token).await
+                    } else if should_refresh_ms {
+                        false
+                    } else {
+                        true
+                    };
+                    if cache_ok {
+                        apply_ms_session(
+                            &mut auth_name,
+                            &mut auth_uuid,
+                            &mut auth_token,
+                            &mut user_type,
+                            &mut auth_is_mojang,
+                            &mut auth_uuid_nodash,
+                            &mut legacy_session,
+                            mc_name.clone(),
+                            mc_uuid.clone(),
+                            mc_access_token.clone(),
+                        );
+                    } else if ms_refresh_error.is_some() {
+                        eprintln!("[Launch] cached mc_access_token is invalid");
+                    }
+                }
+            }
+        }
+
+        if should_refresh_ms && !auth_is_mojang {
+            write_launch_auth_dump(
+                &game_dir,
+                &version_id,
+                &server_address,
+                "microsoft",
+                "msa",
+                false,
+                false,
+                if is_friend_world_join {
+                    "blocked_friend_world_ms_refresh_failed"
+                } else {
+                    "blocked_ms_session_unavailable"
+                },
+            );
+            if ms_refresh_error.as_deref() == Some(MS_NO_JAVA_PROFILE_ERR) {
+                return Err(MS_NO_JAVA_PROFILE_ERR.to_string());
+            }
+            let detail = ms_refresh_error
+                .as_deref()
+                .unwrap_or("сессия Microsoft недоступна");
+            return Err(format!(
+                "Не удалось обновить сессию Microsoft ({detail}). \
+                 Войдите снова через Microsoft на вкладке Аккаунты."
+            ));
+        }
+    }
+
+    if let Some(supplied) = &bridge {
+        auth_name = supplied.nick.clone();
+        auth_uuid = supplied.uuid.clone();
+        auth_uuid_nodash = auth_uuid.replace('-', "");
+        auth_token = if supplied.token.is_empty() { "offline".into() } else { supplied.token.clone() };
+        user_type = supplied.user_type.clone();
+        auth_is_mojang = supplied.user_type == "msa";
+        legacy_session = if supplied.token.is_empty() { "offline".into() } else { format!("token:{auth_token}:{auth_uuid_nodash}") };
+    }
+    let auth_mode: &str = if auth_is_mojang {
+        "microsoft"
+    } else if auth_token != "offline" && !auth_token.is_empty() {
+        "ely"
+    } else {
+        "offline"
+    };
+    let has_access_token = auth_token != "offline" && !auth_token.is_empty();
+
+    if is_friend_world_join && auth_mode == "offline" {
+        write_launch_auth_dump(
+            &game_dir,
+            &version_id,
+            &server_address,
+            auth_mode,
+            &user_type,
+            has_access_token,
+            false,
+            "blocked_friend_world_offline",
+        );
+        return Err(if online {
+            FRIEND_WORLD_OFFLINE_ERR
+        } else {
+            FRIEND_WORLD_NO_NETWORK_ERR
+        }
+        .to_string());
+    }
+
+    let mut authlib_injector_path: Option<std::path::PathBuf> = None;
+    if bridge.is_none() && has_access_token && !auth_is_mojang {
+        match ensure_authlib_injector().await {
+            Ok(path) => {
+                eprintln!(
+                    "[ElyAuth] Используется authlib-injector: {}",
+                    path.to_string_lossy().replace('\\', "/")
+                );
+                authlib_injector_path = Some(path);
+            }
+            Err(e) => {
+                write_launch_auth_dump(
+                    &game_dir,
+                    &version_id,
+                    &server_address,
+                    auth_mode,
+                    &user_type,
+                    has_access_token,
+                    false,
+                    if is_friend_world_join {
+                        "blocked_friend_world_authlib_missing"
+                    } else {
+                        "blocked_ely_authlib_missing"
+                    },
+                );
+                return Err(format!(
+                    "Для аккаунта Ely.by нужен authlib-injector: {e}"
+                ));
+            }
+        }
+    }
+    let authlib_injector = authlib_injector_path.is_some();
+
+    let libs_dir_str = libs_root
+        .to_str()
+        .ok_or("Путь к папке libraries не в UTF-8")?;
+    let classpath_sep = if os_name == "windows" { ";" } else { ":" };
+
+    let is_neoforge = version_id.to_ascii_lowercase().contains("neoforge")
+        || detail
+            .libraries
+            .iter()
+            .any(|l| l.name.to_ascii_lowercase().contains("net.neoforged:"));
+    let (java_major, java_component) = if let Some(ref jv) = detail.java_version {
+        (jv.major_version, jv.component.clone())
+    } else {
+        if is_forge && !is_neoforge {
+            let (major, component) = forge_java_runtime_for_mc_version(&effective_jar_version);
+            eprintln!(
+                "[Launch] Forge без java_version в manifest: используем Java {major} ({component})"
+            );
+            (major, component.to_string())
+        } else if is_fabric {
+            let (major, component) = fallback_java_runtime_for_mc_version(&effective_jar_version);
+            eprintln!(
+                "[Launch] Fabric без java_version в manifest: используем Java {major} ({component})"
+            );
+            (major, component.to_string())
+        } else {
+            let (major, component) = fallback_java_runtime_for_mc_version(&effective_jar_version);
+            eprintln!(
+                "[Launch] Без java_version в manifest: используем Java {major} ({component})"
+            );
+            (major, component.to_string())
+        }
+    };
+    emit_launch_stage(&app, "java");
+    let bridge_java = bridge.as_ref().and_then(|_| load_selected_instance_settings().ok().flatten())
+        .and_then(|(_, s)| s.java_settings).and_then(|s| s.java_path)
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_file() && crate::services::java::detect::detect_java_major_version(p) == Some(java_major));
+    let default_java_path = if let Some(path) = bridge_java { path } else {
+        match crate::java_runtime::ensure_java_runtime(java_major, &java_component).await {
+            Ok(path) => path,
+            Err(e) => {
+                let custom_java = load_selected_instance_settings()
+                    .ok()
+                    .flatten()
+                    .and_then(|(_, s)| s.java_settings)
+                    .unwrap_or_else(|| settings_service::load_java_settings(&app))
+                    .java_path
+                    .map(|p| std::path::PathBuf::from(p.trim()))
+                    .filter(|p| p.is_file());
+                match custom_java {
+                    Some(path) => {
+                        eprintln!("[Launch] Java {java_major} недоступна ({e}), берём путь из настроек");
+                        path
+                    }
+                    None if !online => {
+                        return Err(format!(
+                            "Java {java_major} ещё не скачана, а без интернета её не загрузить. \
+                             Подключитесь к сети один раз или укажите путь к Java в настройках."
+                        ));
+                    }
+                    None => return Err(e),
+                }
+            }
+        }
+    };
+    eprintln!(
+        "[Launch] Java: {} (runtime {} {})",
+        default_java_path.display(),
+        java_major,
+        java_component
+    );
+
+    let settings = settings_service::effective_settings_for_launch();
+    let instance_settings_for_launch =
+        load_selected_instance_settings()
+            .ok()
+            .flatten()
+            .map(|(_, s)| s);
+
+    let quick_play_log = quick_play_log_path(&game_dir)
+        .to_string_lossy()
+        .replace('\\', "/");
+    if supports_quick_play {
+        let _ = std::fs::create_dir_all(game_dir.join(QUICK_PLAY_DIR));
+    }
+    if let Some(addr) = &join_address {
+        record_server_join(&game_dir, addr);
+    }
+
+    let replace = |s: &str| -> String {
+        s.replace("${game_directory}", game_dir_str)
+            .replace("${gameDir}", game_dir_str)
+            .replace("${natives}", natives_str)
+            .replace("${natives_directory}", natives_str)
+            .replace("${classpath}", &classpath_str)
+            .replace("${library_directory}", libs_dir_str)
+            .replace("${classpath_separator}", classpath_sep)
+            .replace("${assetsDir}", assets_str)
+            .replace("${game_assets}", assets_str)
+            .replace("${assets_root}", assets_str)
+            .replace("${assets_index_name}", detail.assets.as_deref().unwrap_or(""))
+            .replace("${version_name}", &version_id)
+            .replace("${version}", &version_id)
+            .replace("${auth_player_name}", &auth_name)
+            .replace("${auth_uuid}", &auth_uuid)
+            .replace("${auth_access_token}", &auth_token)
+            .replace("${username}", &auth_name)
+            .replace("${userName}", &auth_name)
+            .replace("${uuid}", &auth_uuid_nodash)
+            .replace("${accessToken}", &auth_token)
+            .replace("${userType}", &user_type)
+            .replace("${auth_session}", &legacy_session)
+            .replace("${session}", &legacy_session)
+            .replace("${sessionId}", &legacy_session)
+            .replace(
+                "${clientid}",
+                if auth_is_mojang {
+                    MS_CLIENT_ID
+                } else {
+                    ELY_CLIENT_ID
+                },
+            )
+            .replace("${auth_xuid}", bridge.as_ref().map(|a| a.xuid.as_str()).unwrap_or(""))
+            .replace("${user_properties}", "{}")
+            .replace("${user_type}", &user_type)
+            .replace("${version_type}", "release")
+            .replace("${is_demo_user}", "false")
+            .replace("${launcher_name}", "16Launcher")
+            .replace("${launcher_version}", "2.0.0")
+            .replace(
+                "${quickPlayPath}",
+                if join_address.is_some() {
+                    quick_play_log.as_str()
+                } else {
+                    ""
+                },
+            )
+            .replace("${quickPlaySingleplayer}", "")
+            .replace(
+                "${quickPlayMultiplayer}",
+                join_address.as_deref().unwrap_or(""),
+            )
+            .replace("${quickPlayRealms}", "")
+    };
+
+    let mut jvm_args: Vec<String> =
+        if detail.arguments.game.is_empty() && detail.minecraft_arguments.is_some() {
+            vec![
+                "-Djava.library.path=".to_string() + natives_str,
+                "-cp".to_string(),
+                classpath_str.clone(),
+            ]
+        } else if is_fabric {
+            let game_jar = jar_path.to_str().unwrap_or("").replace('\\', "/");
+            let fabric_library_path = if uses_natives_subdirectories(&effective_jar_version) {
+                natives_dir
+                    .join("java")
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                natives_str.to_string()
+            };
+            let mut base = vec![
+                format!("-Dfabric.gameJarPath={game_jar}"),
+                format!("-Djava.library.path={fabric_library_path}"),
+                "-cp".to_string(),
+                classpath_str.clone(),
+            ];
+            base.extend(filter_launcher_owned_jvm_args(
+                resolve_arguments(&detail.arguments.jvm, &features, &os_info)
+                    .into_iter()
+                    .map(|s| replace(&s))
+                    .collect(),
+            ));
+            base
+        } else {
+            resolve_arguments(&detail.arguments.jvm, &features, &os_info)
+                .into_iter()
+                .map(|s| replace(&s))
+                .collect::<Vec<String>>()
+        };
+
+    if is_forge {
+        ensure_forge_ignore_list_includes_vanilla_client_jar(&mut jvm_args, &effective_jar_version);
+    }
+
+    let mut jvm_args = if is_forge {
+        filter_forge_problematic_jvm_args(jvm_args).0
+    } else {
+        jvm_args
+    };
+
+    let supports_add_opens = java_major >= 9;
+    if !supports_add_opens {
+        jvm_args = remove_add_opens_for_java_under_9(jvm_args);
+    }
+    if is_forge && supports_add_opens {
+        ensure_forge_safe_opens(&mut jvm_args);
+    }
+
+    let mut game_args: Vec<String> = if let Some(ref legacy) = detail.minecraft_arguments {
+        legacy
+            .split_whitespace()
+            .map(|s| replace(s).to_string())
+            .collect::<Vec<String>>()
+    } else {
+        resolve_arguments(&detail.arguments.game, &features, &os_info)
+            .into_iter()
+            .map(|s| replace(&s))
+            .collect::<Vec<String>>()
+    };
+
+    let mut applied_resolution = false;
+    if let Some(inst) = &instance_settings_for_launch {
+        if let (Some(w), Some(h)) = (inst.resolution_width, inst.resolution_height) {
+            game_args.push("--width".to_string());
+            game_args.push(w.to_string());
+            game_args.push("--height".to_string());
+            game_args.push(h.to_string());
+            applied_resolution = true;
+        }
+    }
+    if !applied_resolution {
+        if let (Some(w), Some(h)) = (settings.resolution_width, settings.resolution_height) {
+            game_args.push("--width".to_string());
+            game_args.push(w.to_string());
+            game_args.push("--height".to_string());
+            game_args.push(h.to_string());
+        }
+    }
+
+    if !features.is_demo_user {
+        game_args.retain(|a| a != "--demo");
+    }
+    game_args = strip_quick_play_game_args(game_args);
+    game_args = strip_legacy_server_args(game_args);
+
+    if supports_quick_play {
+        game_args.push("--quickPlayPath".to_string());
+        game_args.push(quick_play_log.clone());
+    }
+    if let Some(world) = &join_world {
+        game_args.push("--quickPlaySingleplayer".to_string());
+        game_args.push(world.clone());
+    }
+    if let Some(addr) = &join_address {
+        if supports_quick_play {
+            game_args.push("--quickPlayMultiplayer".to_string());
+            game_args.push(addr.clone());
+        }
+
+        let (host, port) = split_server_address(addr);
+        game_args.push("--server".to_string());
+        game_args.push(host);
+        game_args.push("--port".to_string());
+        game_args.push(port);
+    }
+
+    {
+        let mut join_argv = Vec::new();
+        let mut i = 0usize;
+        while i < game_args.len() {
+            let a = &game_args[i];
+            if matches!(
+                a.as_str(),
+                "--quickPlayPath"
+                    | "--quickPlaySingleplayer"
+                    | "--quickPlayMultiplayer"
+                    | "--quickPlayRealms"
+                    | "--server"
+                    | "--port"
+            ) {
+                join_argv.push(a.clone());
+                if i + 1 < game_args.len() && !game_args[i + 1].starts_with("--") {
+                    join_argv.push(game_args[i + 1].clone());
+                    i += 2;
+                    continue;
+                }
+            } else if a.starts_with("${quickPlay") {
+                join_argv.push(a.clone());
+            }
+            i += 1;
+        }
+        eprintln!("[Launch] join quick-play/server args: {join_argv:?}");
+        eprintln!(
+            "[Launch] auth_mode={auth_mode} user_type={user_type} has_access_token={has_access_token} authlib_injector={authlib_injector}"
+        );
+        let dump = format!(
+            "version_id={version_id}\nserver_address={server_address:?}\njoin_address={join_address:?}\ngame_dir={game_dir_str}\nauth_mode={auth_mode}\nuser_type={user_type}\nhas_access_token={has_access_token}\nauthlib_injector={authlib_injector}\nfeatures.has_quick_plays_support={}\nfeatures.is_quick_play_multiplayer={}\nfeatures.is_quick_play_singleplayer={}\n\ngame_args:\n{}\n",
+            features.has_quick_plays_support,
+            features.is_quick_play_multiplayer,
+            features.is_quick_play_singleplayer,
+            format_game_args_for_dump(&game_args),
+        );
+
+        let mut dump_paths = vec![game_dir.join("mc16-last-launch-args.txt")];
+        if let Ok(data) = launcher_data_dir() {
+            dump_paths.push(data.join("mc16-last-launch-args.txt"));
+        }
+        if let Ok(root) = game_root_dir() {
+            let p = root.join("mc16-last-launch-args.txt");
+            if !dump_paths.contains(&p) {
+                dump_paths.push(p);
+            }
+        }
+        for dump_path in &dump_paths {
+            if let Err(e) = std::fs::write(dump_path, &dump) {
+                eprintln!(
+                    "[Launch] failed to write {}: {e}",
+                    dump_path.display()
+                );
+            } else {
+                eprintln!(
+                    "[Launch] wrote argv dump → {}",
+                    dump_path.display()
+                );
+            }
+        }
+        let dump_path = dump_paths
+            .last()
+            .cloned()
+            .unwrap_or_else(|| game_dir.join("mc16-last-launch-args.txt"));
+        let has_sp = game_args.iter().any(|a| a == "--quickPlaySingleplayer");
+        let has_mp = game_args.iter().any(|a| a == "--quickPlayMultiplayer");
+        let has_server = game_args.iter().any(|a| a == "--server");
+        let has_placeholder = game_args.iter().any(|a| a.starts_with("${quickPlay"));
+        if has_sp || has_placeholder {
+            return Err(format!(
+                "Внутренняя ошибка запуска: в argv остался singleplayer/placeholder quick-play \
+                 (sp={has_sp}, placeholder={has_placeholder}). Смотрите {}",
+                dump_path.display()
+            ));
+        }
+        if join_address.is_some() && !has_mp && !has_server {
+            return Err(format!(
+                "Внутренняя ошибка запуска: нет --quickPlayMultiplayer/--server при join. Смотрите {}",
+                dump_path.display()
+            ));
+        }
+    }
+
+    let mut java_settings = instance_settings_for_launch
+        .as_ref()
+        .and_then(|s| s.java_settings.clone())
+        .unwrap_or_else(|| settings_service::load_java_settings(&app));
+
+    let profile_has_own_java_settings = instance_settings_for_launch
+        .as_ref()
+        .and_then(|s| s.java_settings.as_ref())
+        .is_some();
+    let profile_ram_mb_in_file = instance_settings_for_launch
+        .as_ref()
+        .and_then(|s| s.ram_mb)
+        .is_some();
+
+    if profile_ram_mb_in_file {
+        java_settings.xms = None;
+        java_settings.xmx = None;
+    } else if !profile_has_own_java_settings {
+        java_settings.xms = None;
+        java_settings.xmx = None;
+    }
+
+    let has_custom_java = java_settings
+        .java_path
+        .as_ref()
+        .is_some_and(|s| !s.trim().is_empty());
+    let bundled_java_path = default_java_path.clone();
+    let (mut java_path, mut jvm_args) = build_java_command(
+        default_java_path.clone(),
+        &settings,
+        instance_settings_for_launch.as_ref(),
+        &java_settings,
+        game_dir_str,
+        natives_str,
+        assets_str,
+        &version_id,
+        &classpath_str,
+        jvm_args,
+        if (is_forge || is_fabric) && !has_custom_java {
+            Some(default_java_path)
+        } else {
+            None
+        },
+    )?;
+
+    let uses_launchwrapper = detail.main_class == "net.minecraft.launchwrapper.Launch";
+    if uses_launchwrapper && java_major <= 8 && java_path != bundled_java_path {
+        if crate::services::java::detect::detect_java_major_version(&java_path)
+            .is_some_and(|major| major > 8)
+        {
+            log_to_console(
+                &app,
+                &format!(
+                    "[Launch] {effective_jar_version} с LaunchWrapper работает только на Java 8, выбранная Java пропущена"
+                ),
+            );
+            java_path = bundled_java_path.clone();
+        }
+    }
+
+    if let Some(actual_java_major) =
+        crate::services::java::detect::detect_java_major_version(&java_path)
+    {
+        if actual_java_major < java_major {
+            return Err(format!(
+                "Для Minecraft {effective_jar_version} нужна Java {java_major}, а для запуска выбрана Java {actual_java_major}. \
+                 Проверьте путь к Java в настройках — для Fabric/Forge используется встроенная Java Mojang."
+            ));
+        }
+    }
+    #[cfg(unix)]
+    {
+        if let Err(e) = crate::java_runtime::ensure_executable(&java_path) {
+            eprintln!("[Launch] Warning: Failed to set execute permission for {}: {}", java_path.display(), e);
+        } else {
+        }
+    }
+    if let Some(path) = &authlib_injector_path {
+        let agent_path = path.to_string_lossy().replace('\\', "/");
+        jvm_args.insert(
+            0,
+            format!("-javaagent:{}={}", agent_path, ELY_AUTHLIB_INJECTOR_TARGET),
+        );
+    }
+
+    if let Some(supplied) = &bridge {
+        jvm_args.extend(supplied.jvm_args.iter().cloned());
+    }
+    let removed_for_log = if is_forge {
+        let (filtered, removed) = filter_forge_problematic_jvm_args(std::mem::take(&mut jvm_args));
+        jvm_args = filtered;
+        removed
+    } else {
+        Vec::new()
+    };
+
+    eprintln!("[Launch] Forge: {}, Java: {}", is_forge, java_path.display());
+    if !removed_for_log.is_empty() {
+        eprintln!(
+            "[Launch] Forge: удалены проблемные JVM args: {:?}",
+            removed_for_log
+        );
+    }
+    log_to_console(
+        &app,
+        &format!("[Launch] Запуск {} ({})", version_id, java_path.display()),
+    );
+
+    let _jar_path_str = jar_path.to_str().ok_or("Путь к jar не в UTF-8")?;
+
+    if let Err(e) = std::fs::metadata(&java_path) {
+        if e.kind() == ErrorKind::PermissionDenied {
+            return Err(format!(
+                "Нет доступа к Java (os error 13): {}. Добавьте в исключения антивируса или запустите от имени администратора.",
+                java_path.display()
+            ));
+        }
+        return Err(format!("Java не найдена или недоступна: {} — {e}", java_path.display()));
+    }
+    if let Err(e) = std::fs::metadata(&game_dir_str) {
+        if e.kind() == ErrorKind::PermissionDenied {
+            return Err(format!(
+                "Нет доступа к папке игры (os error 13): {}. Перенесите игру в доступную папку или выдайте разрешения приложению.",
+                game_dir_str
+            ));
+        }
+        return Err(format!("Папка игры недоступна: {} — {e}", game_dir_str));
+    }
+
+    if is_our_game_process_alive() {
+        return Err(
+            "Игра уже запущена из этого лаунчера. Сначала остановите её.".to_string(),
+        );
+    }
+    GAME_PROCESS_PID.store(0, Ordering::SeqCst);
+    GAME_PROCESS_MAX_HEAP_BYTES.store(
+        max_heap_from_args(&jvm_args).unwrap_or(0),
+        Ordering::SeqCst,
+    );
+
+    let launch_hooks = launch_hooks::hooks_for_launch(playtime_profile_id.as_deref());
+    let hook_env: Vec<(String, String)> = launch_hooks
+        .env_vars
+        .iter()
+        .map(|var| (var.name.clone(), var.value.clone()))
+        .collect();
+    let (mut cmd, wrapper_program) =
+        launch_hooks::game_command(&java_path, launch_hooks.wrapper_command.as_deref())?;
+    cmd.args(&jvm_args)
+        .arg(&detail.main_class)
+        .args(&game_args)
+        .current_dir(game_dir_str)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(target_os = "linux")]
+    crate::services::game::runtime::apply_linux_display_env(&mut cmd);
+    crate::services::game::runtime::apply_windows_graphics_preference(
+        &mut cmd,
+        &java_path,
+        settings.graphics_adapter.as_deref(),
+    );
+    cmd.envs(hook_env.iter().map(|(k, v)| (k, v)));
+    if let Some(supplied) = &bridge {
+        cmd.envs(supplied.env.iter().map(|(k, v)| (k, v)));
+    }
+    hide_console(&mut cmd);
+
+    let hook_context = playtime_profile_id.as_ref().map(|profile_id| launch_hooks::HookContext {
+        profile_id: profile_id.clone(),
+        game_dir: game_dir.clone(),
+        version_id: version_id.clone(),
+        java_path: java_path.clone(),
+        env_vars: hook_env,
+    });
+
+    emit_launch_stage(&app, "starting");
+    if let (Some(line), Some(ctx)) = (launch_hooks.pre_launch_command.clone(), hook_context.clone()) {
+        let hook_app = app.clone();
+        tokio::task::spawn_blocking(move || launch_hooks::run_pre_launch(&hook_app, &line, &ctx))
+            .await
+            .map_err(|e| format!("{}{e}", launch_hooks::HOOK_FAILED_PREFIX))??;
+    }
+
+    crate::services::game::world_stats::begin_session(&app, &game_dir, &auth_uuid);
+
+    let mut child = cmd.spawn().map_err(|e| {
+        if let Some(program) = wrapper_program.as_deref() {
+            return format!("{}{program}: {e}", launch_hooks::WRAPPER_FAILED_PREFIX);
+        }
+        if e.kind() == ErrorKind::PermissionDenied {
+            format!(
+                "Отказано в доступе (os error 13). Java: {}, рабочая папка: {}",
+                java_path.display(),
+                game_dir_str
+            )
+        } else {
+            format!("Не удалось запустить игру (установите Java): {e}")
+        }
+    })?;
+    let spawned_pid = child.id();
+    GAME_PROCESS_PID.store(spawned_pid as u64, Ordering::SeqCst);
+    crate::infra::window_idle::sync(&app);
+    eprintln!("[Launch] PID: {spawned_pid}");
+    remember_game_session(spawned_pid, playtime_profile_id.clone(), &game_dir);
+    let run_recorder = RunRecorder::start(
+        playtime_profile_id.clone(),
+        &version_id,
+        Some(java_path.display().to_string()),
+        Some(settings.ram_mb),
+    );
+
+    if let Some(ref profile_id) = playtime_profile_id {
+        if let Ok(last_played_at) = record_profile_last_played(profile_id) {
+            if last_played_at > 0 {
+                let payload = LastPlayedUpdatedPayload {
+                    profile_id: profile_id.clone(),
+                    last_played_at,
+                };
+                let _ = app.emit(EVENT_LAST_PLAYED_UPDATED, payload);
+            }
+        }
+    }
+
+    if let Some(stdout) = child.stdout.take() {
+        let app_clone = app.clone();
+        let recorder = run_recorder.clone();
+        std::thread::spawn(move || {
+            for_each_output_line(stdout, |text| {
+                if let Some(r) = recorder.as_ref() {
+                    r.push(&text, false);
+                }
+                observe_game_log_line(&app_clone, &text);
+                if !is_game_console_line_important(&text, "stdout") {
+                    return;
+                }
+                let payload = GameConsoleLinePayload {
+                    line: text,
+                    source: "stdout".to_string(),
+                };
+                let _ = app_clone.emit(EVENT_GAME_CONSOLE_LINE, payload);
+            });
+        });
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        let app_clone = app.clone();
+        let recorder = run_recorder.clone();
+        std::thread::spawn(move || {
+            for_each_output_line(stderr, |text| {
+                if let Some(r) = recorder.as_ref() {
+                    r.push(&text, true);
+                }
+                if !is_game_console_line_important(&text, "stderr") {
+                    return;
+                }
+                let payload = GameConsoleLinePayload {
+                    line: text,
+                    source: "stderr".to_string(),
+                };
+                let _ = app_clone.emit(EVENT_GAME_CONSOLE_LINE, payload);
+            });
+        });
+    }
+
+    if let Some(ref profile_id) = playtime_profile_id {
+        start_playtime_session(profile_id);
+    }
+
+    let app_clone_for_playtime = app.clone();
+    let world_backup_profile = playtime_profile_id
+        .clone()
+        .filter(|_| settings.world_auto_backup);
+    let scheduled_backup_profile = playtime_profile_id.clone();
+    let post_exit_command = launch_hooks.post_exit_command.clone();
+    let session_started_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    std::thread::spawn(move || {
+        const PLAYTIME_FLUSH_INTERVAL: Duration = Duration::from_secs(30);
+        let mut last_flush_at = Instant::now();
+
+        let exit_code = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status.code(),
+                Ok(None) => {
+                    if last_flush_at.elapsed() >= PLAYTIME_FLUSH_INTERVAL {
+                        if let Some((profile_id, delta_seconds, total_seconds)) =
+                            flush_active_playtime()
+                        {
+                            let payload = PlaytimeUpdatedPayload {
+                                profile_id,
+                                delta_seconds,
+                                total_seconds,
+                            };
+                            let _ = app_clone_for_playtime.emit(EVENT_PLAYTIME_UPDATED, payload);
+                        }
+                        last_flush_at = Instant::now();
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+                Err(_) => break None,
+            }
+        };
+
+        forget_game_session();
+        GAME_PROCESS_PID.store(0, Ordering::SeqCst);
+        clear_game_lan_port(&app_clone_for_playtime);
+        crate::infra::window_idle::sync(&app_clone_for_playtime);
+        if let Some(r) = run_recorder.as_ref() {
+            std::thread::sleep(Duration::from_millis(300));
+            r.finish(exit_code);
+        }
+        if let Some(profile_id) = world_backup_profile.as_deref() {
+            crate::services::game::worlds::backups::auto_backup_touched_worlds(profile_id, session_started_ms);
+        }
+
+        let _ = app_clone_for_playtime.emit(
+            EVENT_GAME_PROCESS_EXITED,
+            GameProcessExitedPayload { exit_code },
+        );
+
+        if let Some((profile_id, delta_seconds, total_seconds)) = finish_playtime_session() {
+            let payload = PlaytimeUpdatedPayload {
+                profile_id,
+                delta_seconds,
+                total_seconds,
+            };
+            let _ = app_clone_for_playtime.emit(EVENT_PLAYTIME_UPDATED, payload);
+        }
+        crate::services::game::world_stats::finish_session(&app_clone_for_playtime);
+
+        if REOPEN_LAUNCHER_ON_GAME_EXIT.swap(false, Ordering::SeqCst) {
+            if let Some(window) = app_clone_for_playtime.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+                crate::infra::window_idle::sync(&app_clone_for_playtime);
+            }
+        }
+
+        if let Some(profile_id) = scheduled_backup_profile.as_deref() {
+            crate::services::game::profile_backups::run_scheduled_profile_backup(
+                &app_clone_for_playtime,
+                profile_id,
+            );
+        }
+
+        if let (Some(line), Some(ctx)) = (post_exit_command.as_deref(), hook_context.as_ref()) {
+            launch_hooks::run_post_exit(&app_clone_for_playtime, line, ctx, exit_code);
+        }
+    });
+
+    if settings.close_launcher_on_game_start && join_address.is_none() {
+        REOPEN_LAUNCHER_ON_GAME_EXIT.store(true, Ordering::SeqCst);
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.hide();
+            crate::infra::window_idle::sync(&app);
+        }
+    }
+
+    Ok(())
+}

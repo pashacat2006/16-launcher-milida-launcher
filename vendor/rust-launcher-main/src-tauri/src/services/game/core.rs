@@ -1,0 +1,510 @@
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use reqwest::Client;
+use sha1::{Digest, Sha1};
+
+use crate::services::game::state::CANCEL_DOWNLOAD;
+use crate::services::game::version_types::{Library, LibraryArtifact, LibraryDownloads, OsInfo};
+
+pub(crate) fn fabric_intermediary_library(game_version: &str) -> Library {
+    let name = format!("net.fabricmc:intermediary:{game_version}");
+    let path = fabric_library_path(&name);
+    Library {
+        name,
+        downloads: LibraryDownloads {
+            artifact: Some(LibraryArtifact {
+                path: path.clone(),
+                url: format!("https://maven.fabricmc.net/{path}"),
+                sha1: None,
+                size: 0,
+            }),
+            classifiers: None,
+        },
+        rules: vec![],
+        extract: None,
+        natives: None,
+    }
+}
+
+pub(crate) fn ensure_fabric_intermediary_library(libraries: &mut Vec<Library>, game_version: &str) {
+    let token = format!("net.fabricmc:intermediary:{game_version}");
+    if libraries.iter().any(|l| l.name == token) {
+        return;
+    }
+    libraries.push(fabric_intermediary_library(game_version));
+}
+
+pub(crate) fn fabric_library_path(name: &str) -> String {
+    let parts: Vec<&str> = name.splitn(3, ':').collect();
+    if parts.len() < 3 {
+        return format!("{name}.jar");
+    }
+    let group = parts[0].replace('.', "/");
+    let artifact = parts[1];
+    let version = parts[2];
+    format!("{group}/{artifact}/{version}/{artifact}-{version}.jar")
+}
+
+pub(crate) fn current_os_name() -> &'static str {
+    if std::env::consts::OS == "windows" {
+        "windows"
+    } else if std::env::consts::OS == "macos" {
+        "osx"
+    } else {
+        "linux"
+    }
+}
+
+pub(crate) fn current_os_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        "x86" => "x86",
+        other => other,
+    }
+}
+
+pub(crate) fn os_info() -> OsInfo {
+    OsInfo {
+        name: current_os_name().to_string(),
+        arch: current_os_arch().to_string(),
+    }
+}
+
+pub(crate) async fn download_text_with_retries(client: &Client, url: &str, retries: usize) -> Result<String, String> {
+    // A failed HEAD request to an unrelated host is not evidence that this URL
+    // is unreachable. Let the real GET and its mirrors decide.
+    let urls = crate::services::game::mirrors::candidates(url);
+    let has_fallback = urls.len() > 1;
+    let mut errors: Vec<String> = Vec::new();
+    for (idx, candidate) in urls.iter().enumerate() {
+        let is_last = idx + 1 == urls.len();
+        let fail_fast = has_fallback && !is_last;
+        let attempts = if fail_fast { retries.min(2) } else { retries };
+        let fast_client;
+        let attempt_client = if fail_fast {
+            fast_client = crate::infra::http::http_client_fail_fast();
+            &fast_client
+        } else {
+            client
+        };
+        match fetch_text_once_with_retries(attempt_client, candidate, attempts, fail_fast).await {
+            Ok(text) => {
+                crate::services::game::mirrors::note_success(candidate);
+                return Ok(text);
+            }
+            Err((msg, status)) => {
+                errors.push(msg);
+                if CANCEL_DOWNLOAD.load(Ordering::SeqCst)
+                    || !crate::services::game::mirrors::worth_trying_next(status)
+                {
+                    break;
+                }
+                crate::services::game::mirrors::note_failure(candidate);
+            }
+        }
+    }
+    Err(errors.join("; "))
+}
+
+async fn fetch_text_once_with_retries(
+    client: &Client,
+    url: &str,
+    retries: usize,
+    fail_fast: bool,
+) -> Result<String, (String, Option<u16>)> {
+    let retries = retries.max(1);
+    let mut attempt: usize = 0;
+    loop {
+        if CANCEL_DOWNLOAD.load(Ordering::SeqCst) {
+            return Err(("Загрузка отменена пользователем".to_string(), None));
+        }
+        let resp = client.get(url).send().await;
+        match resp {
+            Ok(r) => {
+                let status = r.status();
+                if status.is_success() {
+                    return r
+                        .text()
+                        .await
+                        .map_err(|e| (format!("Ошибка чтения ответа: {e}"), None));
+                }
+                if !is_retryable_status(status.as_u16(), attempt) || attempt + 1 >= retries {
+                    let body = r.text().await.unwrap_or_else(|_| "<тело ответа недоступно>".to_string());
+                    let body: String = body.chars().take(300).collect();
+                    return Err((format!("HTTP {} для {}: {}", status, url, body), Some(status.as_u16())));
+                }
+            }
+            Err(e) => {
+                if attempt + 1 >= retries || (fail_fast && e.is_timeout()) {
+                    return Err((format!("Ошибка запроса {url}: {e}"), None));
+                }
+            }
+        }
+        tokio::time::sleep(retry_delay(attempt)).await;
+        attempt += 1;
+    }
+}
+
+fn meta_cache_path(url: &str) -> Option<std::path::PathBuf> {
+    let dir = crate::services::game::settings::launcher_cache_dir().ok()?.join("meta");
+    Some(dir.join(format!("{}.txt", sha1_hex_of_bytes(url.as_bytes()))))
+}
+
+pub(crate) fn store_meta_cache(url: &str, text: &str) {
+    if let Some(path) = meta_cache_path(url) {
+        if let Err(e) = crate::infra::fs_atomic::write_atomic(&path, text.as_bytes()) {
+            eprintln!("[Meta] Не удалось сохранить кэш {url}: {e}");
+        }
+    }
+}
+
+pub(crate) fn read_meta_cache(url: &str) -> Option<String> {
+    let text = std::fs::read_to_string(meta_cache_path(url)?).ok()?;
+    (!text.trim().is_empty()).then_some(text)
+}
+
+pub(crate) async fn download_meta_text(client: &Client, url: &str, retries: usize) -> Result<String, String> {
+    match download_text_with_retries(client, url, retries).await {
+        Ok(text) => {
+            store_meta_cache(url, &text);
+            Ok(text)
+        }
+        Err(e) => match read_meta_cache(url) {
+            Some(text) => {
+                eprintln!("[Meta] {url} недоступен ({e}), берём из кэша");
+                Ok(text)
+            }
+            None => Err(e),
+        },
+    }
+}
+
+/// A pinned Minecraft version description is immutable. Reuse the validated
+/// local copy before asking a manifest server, including during partial installs.
+pub(crate) fn read_local_version(versions: &Path, version: &str) -> Option<String> {
+    if version.is_empty() || matches!(version, "." | "..")
+        || !version.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b)) {
+        return None;
+    }
+    let path = versions.join(version).join(format!("{version}.json"));
+    crate::bridge::seed_cached_file(&path);
+    let text = std::fs::read_to_string(path).ok()?;
+    let raw: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if raw["id"].as_str() != Some(version) { return None; }
+    let detail: crate::services::game::version_types::VersionDetail = serde_json::from_value(raw).ok()?;
+    detail.downloads.is_some().then_some(text)
+}
+
+pub(crate) fn is_retryable_status(status: u16, attempt: usize) -> bool {
+    match status {
+        404 => attempt == 0,
+        408 | 425 | 429 => true,
+        s => (500..600).contains(&s),
+    }
+}
+
+pub(crate) fn retry_delay(attempt: usize) -> Duration {
+    use rand::Rng;
+    let base = 1000u64.saturating_mul(1u64 << attempt.min(4));
+    let jitter = rand::thread_rng().gen_range(0..=base / 4);
+    Duration::from_millis(base + jitter)
+}
+
+pub(crate) fn sha1_hex_of_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(bytes);
+    let out = hasher.finalize();
+    format!("{:x}", out)
+}
+
+pub(crate) async fn sha1_hex_of_file(path: &Path) -> Result<String, String> {
+    let path_buf = path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(&path_buf).map_err(|e| {
+            format!(
+                "Не удалось прочитать файл '{}' для SHA1: {e}",
+                path_buf.display()
+            )
+        })?;
+        let mut hasher = Sha1::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = file.read(&mut buf).map_err(|e| {
+                format!(
+                    "Не удалось прочитать файл '{}' для SHA1: {e}",
+                    path_buf.display()
+                )
+            })?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        Ok(format!("{:x}", hasher.finalize()))
+    })
+    .await
+    .map_err(|e| format!("Ошибка расчёта SHA1: {e}"))?
+}
+
+pub(crate) fn file_len_matches(path: &Path, expected_size: u64) -> bool {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() && m.len() > 0 => expected_size == 0 || m.len() == expected_size,
+        _ => false,
+    }
+}
+
+pub(crate) fn safe_join(base: &Path, rel: &str) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+    let rel = rel.replace('\\', "/");
+    let mut out = base.to_path_buf();
+    let mut any = false;
+    for comp in Path::new(&rel).components() {
+        match comp {
+            Component::Normal(part) => {
+                out.push(part);
+                any = true;
+            }
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    any.then_some(out)
+}
+
+pub(crate) async fn try_fetch_remote_sha1(client: &Client, url: &str) -> Option<String> {
+    let sha1_url = format!("{url}.sha1");
+    let text = download_text_with_retries(client, &sha1_url, 2).await.ok()?;
+    let s = text.trim();
+    if s.len() >= 40 {
+        Some(s[..40].to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+pub(crate) fn library_applies(lib: &Library, os_name: &str) -> bool {
+    if lib.rules.is_empty() {
+        return true;
+    }
+    let current_arch = std::env::consts::ARCH;
+    let mut allowed = false;
+    for r in &lib.rules {
+        if let Some(rule_os) = r.os.as_ref() {
+            if let Some(name) = rule_os.name.as_deref() {
+                if name != os_name {
+                    continue;
+                }
+            }
+            if let Some(arch) = rule_os.arch.as_deref() {
+                if !current_arch.contains(arch) {
+                    continue;
+                }
+            }
+        }
+        match r.action.as_str() {
+            "allow" => allowed = true,
+            "disallow" => return false,
+            _ => {}
+        }
+    }
+    allowed
+}
+
+pub(crate) fn parse_library_coords(name: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = name.splitn(3, ':');
+    let group = parts.next()?;
+    let artifact = parts.next()?;
+    let version = parts.next()?;
+    if group.is_empty() || artifact.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some((group, artifact, version))
+}
+
+pub(crate) fn compare_version_like(a: &str, b: &str) -> std::cmp::Ordering {
+    let av = a
+        .split(|c: char| !(c.is_ascii_alphanumeric()))
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>();
+    let bv = b
+        .split(|c: char| !(c.is_ascii_alphanumeric()))
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>();
+    let n = av.len().max(bv.len());
+    for i in 0..n {
+        let aa = av.get(i).copied().unwrap_or("0");
+        let bb = bv.get(i).copied().unwrap_or("0");
+        let ord = match (aa.parse::<u64>(), bb.parse::<u64>()) {
+            (Ok(na), Ok(nb)) => na.cmp(&nb),
+            _ => aa.cmp(bb),
+        };
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+pub(crate) fn native_classifier_candidates(lib: &Library, os_name: &str) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    let arch = std::env::consts::ARCH;
+    let is_64 = arch == "x86_64" || arch == "aarch64";
+    let is_arm = arch == "aarch64";
+
+    match (os_name, is_arm) {
+        ("osx", true) => out.push("natives-macos-arm64".to_string()),
+        ("windows", true) => out.push("natives-windows-arm64".to_string()),
+        ("linux", true) => {
+            out.push("natives-linux-arm64".to_string());
+            out.push("natives-linux-aarch64".to_string());
+        }
+        _ => {}
+    }
+
+    let base = match os_name {
+        "windows" => "natives-windows",
+        "osx" => "natives-macos",
+        _ => "natives-linux",
+    };
+    out.push(base.to_string());
+    if os_name == "windows" {
+        if is_arm {
+        } else if is_64 {
+            out.push("natives-windows-64".to_string());
+            out.push("natives-windows-x86_64".to_string());
+        } else {
+            out.push("natives-windows-32".to_string());
+            out.push("natives-windows-x86".to_string());
+        }
+    }
+    if let Some(map) = &lib.natives {
+        if let Some(value) = map.get(os_name).and_then(|v| v.as_str()) {
+            let replaced = value.replace("${arch}", if is_64 { "64" } else { "32" });
+            out.push(replaced);
+        }
+    }
+    out.dedup();
+    out
+}
+
+pub(crate) fn is_probably_native_jar_path(rel_path: &str) -> bool {
+    let p = rel_path.replace('\\', "/").to_ascii_lowercase();
+    p.ends_with(".jar") && p.contains("-natives-")
+}
+
+pub(crate) fn resolve_native_artifact<'a>(lib: &'a Library, os_name: &str) -> Option<&'a LibraryArtifact> {
+    let classifiers = lib.downloads.classifiers.as_ref()?;
+    for key in native_classifier_candidates(lib, os_name) {
+        if let Some(artifact) = classifiers.get(&key) {
+            return Some(artifact);
+        }
+    }
+    None
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn offline_regression_reachable_get_does_not_wait_for_other_hosts() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/version.json", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 4096];
+            socket.read(&mut buf).await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+        });
+        let client = Client::builder().no_proxy().timeout(Duration::from_secs(1)).build().unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), download_text_with_retries(&client, &url, 1))
+            .await.expect("A reachable GET must not wait for a four-second internet probe").unwrap();
+        assert_eq!(result, "{}");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "Manual check against the public Mojang endpoint"]
+    async fn mojang_network_smoke() {
+        let root = std::env::temp_dir().join(format!("mc16-network-smoke-{}", std::process::id()));
+        crate::bridge::initialize(&root, &root.join("game")).unwrap();
+        let client = crate::infra::http::http_client(false);
+        let url = "https://piston-meta.mojang.com/v1/packages/ff7ef54488da4a711f3c8a781a9f79105bbe801a/1.21.1.json";
+        let text = tokio::time::timeout(Duration::from_secs(30), download_text_with_retries(&client, url, 1))
+            .await.expect("Mojang request timed out").expect("Mojang request failed");
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], "1.21.1");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn offline_regression_partial_install_uses_valid_local_mojang_description() {
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("mc16-local-version-{}-{unique}", std::process::id()));
+        let dir = root.join("1.21.1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("1.21.1.json");
+        let valid = serde_json::json!({"id":"1.21.1", "mainClass":"net.minecraft.client.main.Main",
+            "downloads":{"client":{"url":"https://example.invalid/client.jar", "size":123}}});
+        std::fs::write(&path, valid.to_string()).unwrap();
+        assert!(read_local_version(&root, "1.21.1").is_some(), "No manifest server is needed for a cached version");
+        assert!(read_local_version(&root, "../1.21.1").is_none());
+        assert!(read_local_version(&root, "..").is_none());
+        std::fs::write(&path, valid.to_string().replace("1.21.1", "1.21.11")).unwrap();
+        assert!(read_local_version(&root, "1.21.1").is_none(), "Wrong-version metadata must not be adopted");
+        std::fs::write(&path, b"{broken").unwrap();
+        assert!(read_local_version(&root, "1.21.1").is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn safe_join_rejects_escaping_paths() {
+        let base = Path::new("base");
+        assert!(safe_join(base, "../evil.dll").is_none());
+        assert!(safe_join(base, "a/../../evil").is_none());
+        assert!(safe_join(base, "/etc/passwd").is_none());
+        assert!(safe_join(base, "").is_none());
+        assert_eq!(
+            safe_join(base, r"mods\a.jar").unwrap(),
+            Path::new("base").join("mods").join("a.jar")
+        );
+        assert_eq!(
+            safe_join(base, "./config/x.toml").unwrap(),
+            Path::new("base").join("config").join("x.toml")
+        );
+    }
+
+    #[test]
+    fn retryable_statuses() {
+        assert!(is_retryable_status(503, 5));
+        assert!(is_retryable_status(429, 5));
+        assert!(!is_retryable_status(403, 0));
+        assert!(is_retryable_status(404, 0));
+        assert!(!is_retryable_status(404, 1));
+    }
+
+    #[test]
+    fn retry_delay_is_bounded() {
+        for attempt in 0..20 {
+            assert!(retry_delay(attempt) <= Duration::from_millis(20_000));
+        }
+    }
+
+    #[test]
+    fn file_len_matches_checks_size() {
+        let dir = std::env::temp_dir().join(format!("mc16-len-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"12345").unwrap();
+        assert!(file_len_matches(&f, 5));
+        assert!(file_len_matches(&f, 0));
+        assert!(!file_len_matches(&f, 6));
+        assert!(!file_len_matches(&dir.join("missing"), 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

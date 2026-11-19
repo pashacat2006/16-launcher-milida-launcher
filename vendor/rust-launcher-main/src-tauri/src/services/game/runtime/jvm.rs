@@ -1,0 +1,273 @@
+use std::path::PathBuf;
+
+use crate::models::{InstanceSettings, JavaSettings, Settings};
+use crate::services::game::arguments::{
+    format_mb_to_spec, parse_memory_spec_to_mb, replace_basic_placeholders,
+};
+use crate::services::java as java_service;
+
+pub(crate) use crate::services::game::arguments::{
+    ensure_forge_ignore_list_includes_vanilla_client_jar, ensure_forge_safe_opens,
+    filter_forge_problematic_jvm_args, filter_launcher_owned_jvm_args, remove_add_opens_for_java_under_9,
+};
+
+const SYSTEM_MEMORY_RESERVE_MB: u64 = 2048;
+const MIN_HEAP_LIMIT_MB: u64 = 1024;
+
+pub(crate) fn heap_limit_mb(total_memory_bytes: u64) -> Option<u64> {
+    let total_mb = total_memory_bytes / (1024 * 1024);
+    (total_mb > 0).then(|| total_mb.saturating_sub(SYSTEM_MEMORY_RESERVE_MB).max(MIN_HEAP_LIMIT_MB))
+}
+
+pub(crate) fn build_java_command(
+    default_java_path: PathBuf,
+    settings: &Settings,
+    instance_settings_for_launch: Option<&InstanceSettings>,
+    java_settings: &JavaSettings,
+    game_dir_str: &str,
+    natives_str: &str,
+    assets_str: &str,
+    version_id: &str,
+    classpath_str: &str,
+    mut jvm_args: Vec<String>,
+    force_java_path: Option<PathBuf>,
+) -> Result<(PathBuf, Vec<String>), String> {
+    let mut java_path = if let Some(forced) = force_java_path {
+        forced
+    } else if let Some(custom) = java_settings
+        .java_path
+        .as_ref()
+        .and_then(|s| {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        })
+    {
+        let custom_path = PathBuf::from(custom);
+        let looks_like_bare_command = custom_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|name| {
+                let lower = name.to_ascii_lowercase();
+                (lower == "java" || lower == "java.exe" || lower == "javaw" || lower == "javaw.exe")
+                    && custom_path.parent().map(|p| p.as_os_str().is_empty()).unwrap_or(true)
+            });
+        if looks_like_bare_command || !custom_path.exists() {
+            eprintln!(
+                "[Launch] Кастомный Java путь недоступен ({}), используем runtime лаунчера",
+                custom_path.display()
+            );
+            default_java_path
+        } else {
+            custom_path
+        }
+    } else {
+        default_java_path
+    };
+
+    #[cfg(target_os = "windows")]
+    if settings.show_console_on_launch {
+        if let Some(parent) = java_path.parent() {
+            let candidate = parent.join("java.exe");
+            if candidate.exists() {
+                java_path = candidate;
+            }
+        }
+    }
+
+    if let Some(java_major) = java_service::detect::detect_java_major_version(&java_path) {
+        if java_major < 9 {
+            let mut filtered: Vec<String> = Vec::with_capacity(jvm_args.len());
+            let mut i = 0usize;
+            while i < jvm_args.len() {
+                if jvm_args[i] == "--add-opens" {
+                    i += 2;
+                    continue;
+                }
+                if jvm_args[i].starts_with("--add-opens=") {
+                    i += 1;
+                    continue;
+                }
+                filtered.push(jvm_args[i].clone());
+                i += 1;
+            }
+            jvm_args = filtered;
+        }
+    }
+
+    let base_ram_mb = settings.ram_mb.max(1024);
+    let mut xms_mb = (base_ram_mb / 2).max(512);
+    let mut xmx_mb = base_ram_mb;
+
+    if let Some(ref xms_str) = java_settings.xms {
+        if let Some(mb) = parse_memory_spec_to_mb(xms_str) {
+            xms_mb = mb;
+        }
+    }
+    if let Some(ref xmx_str) = java_settings.xmx {
+        if let Some(mb) = parse_memory_spec_to_mb(xmx_str) {
+            xmx_mb = mb;
+        }
+    }
+
+    if xms_mb > xmx_mb {
+        std::mem::swap(&mut xms_mb, &mut xmx_mb);
+    }
+
+    if let Some(limit_mb) = heap_limit_mb(crate::infra::process_probe::total_memory_bytes()) {
+        if u64::from(xmx_mb) > limit_mb {
+            xmx_mb = limit_mb as u32;
+            if xms_mb > xmx_mb {
+                xms_mb = xmx_mb;
+            }
+        }
+    }
+
+    let xms_flag = format!("-Xms{}", format_mb_to_spec(xms_mb));
+    let xmx_flag = format!("-Xmx{}", format_mb_to_spec(xmx_mb));
+
+    jvm_args.retain(|a| !a.starts_with("-Xms") && !a.starts_with("-Xmx"));
+    jvm_args.insert(0, xmx_flag.clone());
+    jvm_args.insert(0, xms_flag.clone());
+
+    let replace_basic = |s: &str| -> String {
+        replace_basic_placeholders(s, classpath_str, natives_str, game_dir_str, assets_str, version_id)
+    };
+
+    let filter_tokens = |tokens: Vec<String>| -> Vec<String> {
+        const FORBIDDEN_PREFIXES: &[&str] = &["-agentlib:", "-agentpath:", "-Xrun", "-Xdebug"];
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < tokens.len() {
+            let a = tokens[i].trim().to_string();
+            if a.is_empty() {
+                i += 1;
+                continue;
+            }
+
+            if FORBIDDEN_PREFIXES.iter().any(|p| a.starts_with(p)) {
+                eprintln!("[JavaSettings] Запрещённый флаг пропущен: {}", a);
+                i += 1;
+                continue;
+            }
+
+            if a == "-p" || a == "--module-path" {
+                eprintln!("[JavaSettings] Флаг модулей игнорирован: {}", a);
+                i += 1;
+                if i < tokens.len() {
+                    i += 1;
+                }
+                continue;
+            }
+
+            if a == "-cp" || a == "-classpath" {
+                eprintln!("[JavaSettings] Пользовательский -cp/-classpath игнорирован (обязательный classpath задаётся лаунчером).");
+                i += 1;
+                if i < tokens.len() {
+                    i += 1;
+                }
+                continue;
+            }
+            if a == "-Djava.library.path" {
+                eprintln!("[JavaSettings] Пользовательский -Djava.library.path игнорирован (обязательный natives задаётся лаунчером).");
+                i += 1;
+                if i < tokens.len() {
+                    i += 1;
+                }
+                continue;
+            }
+            if a.starts_with("-Djava.library.path=") {
+                eprintln!("[JavaSettings] Пользовательский -Djava.library.path=... игнорирован (обязательный natives задаётся лаунчером).");
+                i += 1;
+                continue;
+            }
+
+            out.push(replace_basic(&a));
+            i += 1;
+        }
+        out
+    };
+
+    if let Some(inst) = instance_settings_for_launch {
+        if let Some(extra) = &inst.jvm_args {
+            let parts: Vec<String> = extra.split_whitespace().map(|s| s.to_string()).collect();
+            jvm_args.extend(filter_tokens(parts));
+        }
+    }
+
+    if java_settings.use_custom_jvm_args {
+        if let Some(extra) = &java_settings.jvm_args {
+            let parts: Vec<String> = extra.split_whitespace().map(|s| s.to_string()).collect();
+            jvm_args.extend(filter_tokens(parts));
+        }
+    }
+
+    if java_settings.prefer_ipv6_network {
+        jvm_args.push("-Djava.net.preferIPv4Stack=false".to_string());
+        jvm_args.push("-Djava.net.preferIPv6Addresses=true".to_string());
+    }
+
+    apply_default_gc_flags(&mut jvm_args);
+
+    Ok((java_path, jvm_args))
+}
+
+const DEFAULT_GC_FLAGS: &[&str] = &[
+    "-XX:+UnlockExperimentalVMOptions",
+    "-XX:+UseG1GC",
+    "-XX:G1NewSizePercent=20",
+    "-XX:G1ReservePercent=20",
+    "-XX:MaxGCPauseMillis=50",
+    "-XX:G1HeapRegionSize=32M",
+];
+
+fn apply_default_gc_flags(jvm_args: &mut Vec<String>) {
+    let has_custom_gc = jvm_args
+        .iter()
+        .any(|a| a.starts_with("-XX:+Use") && a.ends_with("GC"));
+    if has_custom_gc {
+        return;
+    }
+    let at = jvm_args
+        .iter()
+        .position(|a| !a.starts_with("-Xms") && !a.starts_with("-Xmx"))
+        .unwrap_or(jvm_args.len());
+    jvm_args.splice(at..at, DEFAULT_GC_FLAGS.iter().map(|s| s.to_string()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heap_limit_leaves_memory_for_the_system() {
+        const GB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(heap_limit_mb(16 * GB), Some(14 * 1024));
+        assert_eq!(heap_limit_mb(8 * GB), Some(6 * 1024));
+        assert_eq!(heap_limit_mb(2 * GB), Some(1024));
+        assert_eq!(heap_limit_mb(0), None);
+    }
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn default_gc_flags_follow_heap_size() {
+        let mut a = args(&["-Xms2G", "-Xmx4G", "-cp", "x.jar"]);
+        apply_default_gc_flags(&mut a);
+        assert_eq!(a[2], "-XX:+UnlockExperimentalVMOptions");
+        assert_eq!(a[3], "-XX:+UseG1GC");
+        assert_eq!(a[a.len() - 2], "-cp");
+    }
+
+    #[test]
+    fn custom_gc_is_kept() {
+        let mut a = args(&["-Xmx4G", "-XX:+UseZGC"]);
+        apply_default_gc_flags(&mut a);
+        assert_eq!(a, args(&["-Xmx4G", "-XX:+UseZGC"]));
+    }
+}

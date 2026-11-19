@@ -1,0 +1,872 @@
+use serde::{Deserialize, Serialize};
+
+use crate::app::paths::{game_root_dir, instance_dir};
+use crate::infra::api_base::curseforge_api_base;
+use crate::infra::http::{http_client, http_client_for_binary_download};
+use crate::services::game::download::fetch_verified;
+
+pub mod installer;
+
+pub use installer::download_curseforge_modpack_and_import;
+
+const MINECRAFT_GAME_ID: u32 = 432;
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseforgeModHit {
+    pub id: u32,
+    pub slug: String,
+    pub name: String,
+    pub summary: String,
+    pub download_count: u64,
+    pub thumbnail_url: Option<String>,
+    pub author: String,
+    pub class_id: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseforgeSearchResult {
+    pub hits: Vec<CurseforgeModHit>,
+    pub index: u32,
+    pub page_size: u32,
+    pub total_count: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseforgeCategoryHit {
+    pub id: u32,
+    pub name: String,
+    pub slug: String,
+    pub icon_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseforgeScreenshot {
+    pub url: String,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseforgeModDetails {
+    pub id: u32,
+    pub name: String,
+    pub summary: String,
+    pub description: String,
+    pub download_count: u64,
+    pub thumbnail_url: Option<String>,
+    pub author: String,
+    pub website_url: Option<String>,
+    pub wiki_url: Option<String>,
+    pub issues_url: Option<String>,
+    pub source_url: Option<String>,
+    pub categories: Vec<CurseforgeCategoryHit>,
+    pub screenshots: Vec<CurseforgeScreenshot>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseforgeFileHit {
+    pub id: u32,
+    pub display_name: String,
+    pub file_name: String,
+    pub download_url: Option<String>,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+    pub file_date: String,
+    pub release_type: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CfApiResponse<T> {
+    pub(crate) data: T,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfPagination {
+    #[serde(default)]
+    total_count: u32,
+    #[serde(default)]
+    index: u32,
+    #[serde(default)]
+    page_size: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfSearchModsResponse {
+    data: Vec<CfMod>,
+    pagination: CfPagination,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfMod {
+    id: u32,
+    slug: String,
+    name: String,
+    summary: String,
+    #[serde(default)]
+    description: String,
+    download_count: u64,
+    class_id: u32,
+    authors: Vec<CfAuthor>,
+    logo: Option<CfLogo>,
+    links: Option<CfModLinks>,
+    #[serde(default)]
+    categories: Vec<CfCategory>,
+    #[serde(default)]
+    screenshots: Vec<CfScreenshot>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfCategory {
+    id: u32,
+    name: String,
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    icon_url: Option<String>,
+    #[serde(default)]
+    class_id: Option<u32>,
+    #[serde(default)]
+    parent_category_id: Option<u32>,
+    #[serde(default)]
+    is_class: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfScreenshot {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    thumbnail_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfModLinks {
+    #[serde(default)]
+    website_url: Option<String>,
+    #[serde(default)]
+    wiki_url: Option<String>,
+    #[serde(default)]
+    issues_url: Option<String>,
+    #[serde(default)]
+    source_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfAuthor {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfLogo {
+    thumbnail_url: Option<String>,
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfModFilesResponse {
+    data: Vec<CfFile>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CfFile {
+    pub(crate) id: u32,
+    pub(crate) display_name: String,
+    pub(crate) file_name: String,
+    pub(crate) download_url: Option<String>,
+    #[serde(default)]
+    pub(crate) game_versions: Vec<String>,
+    #[serde(default)]
+    sortable_game_versions: Vec<CfSortableGameVersion>,
+    #[serde(default)]
+    pub(crate) file_date: String,
+    #[serde(default)]
+    release_type: u8,
+    #[serde(default)]
+    hashes: Vec<CfFileHash>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct CfFileHash {
+    value: String,
+    algo: u8,
+}
+
+impl CfFile {
+    pub(crate) fn channel(&self) -> &'static str {
+        match self.release_type {
+            2 => "beta",
+            3 => "alpha",
+            _ => "release",
+        }
+    }
+
+    pub(crate) fn sha1(&self) -> Option<String> {
+        self.hashes
+            .iter()
+            .find(|h| h.algo == 1 && !h.value.trim().is_empty())
+            .map(|h| h.value.trim().to_string())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfModClass {
+    id: u32,
+    #[serde(default)]
+    class_id: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CfSortableGameVersion {
+    #[serde(default)]
+    game_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfMinecraftVersion {
+    version_string: String,
+}
+
+fn class_id_for_content_type(content_type: &str) -> Result<u32, String> {
+    match content_type {
+        "mod" => Ok(6),
+        "resourcepack" => Ok(12),
+        "shader" => Ok(6552),
+        "modpack" => Ok(4471),
+        other => Err(format!(
+            "Неизвестный тип контента CurseForge: {other}. Ожидается mod, resourcepack, shader или modpack."
+        )),
+    }
+}
+
+fn loaders_from_filename(file_name: &str) -> Vec<String> {
+    let n = file_name.to_lowercase();
+    let mut out = Vec::new();
+    if n.contains("neoforge") {
+        out.push("neoforge".to_string());
+    } else if n.contains("forge") {
+        out.push("forge".to_string());
+    }
+    if n.contains("fabric") {
+        out.push("fabric".to_string());
+    }
+    if n.contains("quilt") {
+        out.push("quilt".to_string());
+    }
+    out
+}
+
+fn is_minecraft_release_version(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let major = match parts.next() {
+        Some(v) => v,
+        None => return false,
+    };
+    let minor = match parts.next() {
+        Some(v) => v,
+        None => return false,
+    };
+    if !major.chars().all(|c| c.is_ascii_digit())
+        || !minor.chars().all(|c| c.is_ascii_digit())
+    {
+        return false;
+    }
+    if let Some(patch) = parts.next() {
+        if !patch.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        if parts.next().is_some() {
+            return false;
+        }
+    } else if parts.next().is_some() {
+        return false;
+    }
+    let major_num: u32 = major.parse().unwrap_or(0);
+    major_num == 1 || major_num >= 20
+}
+
+fn mod_loader_type(loader: &str) -> Option<u8> {
+    match loader {
+        "forge" => Some(1),
+        "fabric" => Some(4),
+        "quilt" => Some(5),
+        "neoforge" => Some(6),
+        _ => None,
+    }
+}
+
+pub(crate) fn cf_client() -> Result<reqwest::Client, String> {
+    Ok(http_client(false))
+}
+
+pub(crate) async fn cf_get_json<T: for<'de> Deserialize<'de>>(
+    client: &reqwest::Client,
+    path_and_query: &str,
+) -> Result<T, String> {
+    let url = format!("{}{}", curseforge_api_base(), path_and_query);
+    let mut last_err = String::new();
+    let mut last_retry_after = None;
+    for attempt in 0..CF_GET_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(retry_delay(attempt, last_retry_after)).await;
+        }
+        let resp = match client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("Ошибка запроса CurseForge API: {e}");
+                last_retry_after = None;
+                continue;
+            }
+        };
+        let status = resp.status();
+        if status.is_success() {
+            return resp
+                .json::<T>()
+                .await
+                .map_err(|e| format!("Ошибка разбора ответа CurseForge API: {e}"));
+        }
+        last_retry_after = parse_retry_after(&resp).or_else(|| rate_limit_pause(status));
+        let body = resp.text().await.unwrap_or_default();
+        let detail = if body.is_empty() {
+            String::new()
+        } else {
+            format!(": {body}")
+        };
+        last_err = format!("CurseForge API вернул ошибку {status}{detail}");
+        if status.as_u16() != 429 && !status.is_server_error() {
+            break;
+        }
+    }
+    Err(last_err)
+}
+
+const CF_GET_ATTEMPTS: usize = 5;
+
+fn parse_retry_after(resp: &reqwest::Response) -> Option<std::time::Duration> {
+    resp.headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|s| std::time::Duration::from_secs(s.min(15)))
+}
+
+fn rate_limit_pause(status: reqwest::StatusCode) -> Option<std::time::Duration> {
+    (status == reqwest::StatusCode::TOO_MANY_REQUESTS).then(|| std::time::Duration::from_secs(12))
+}
+
+fn retry_delay(attempt: usize, retry_after: Option<std::time::Duration>) -> std::time::Duration {
+    let backoff = std::time::Duration::from_millis(500 * (1u64 << attempt.min(5)));
+    retry_after.map_or(backoff, |ra| ra.max(backoff))
+}
+
+const CF_POST_ATTEMPTS: usize = 5;
+const CF_BULK_CHUNK: usize = 100;
+
+async fn cf_post_json<T: for<'de> Deserialize<'de>>(
+    client: &reqwest::Client,
+    path_and_query: &str,
+    body: &serde_json::Value,
+) -> Result<T, String> {
+    let url = format!("{}{}", curseforge_api_base(), path_and_query);
+    let mut last_err = String::new();
+    let mut last_retry_after = None;
+    for attempt in 0..CF_POST_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(retry_delay(attempt, last_retry_after)).await;
+        }
+        let resp = match client
+            .post(&url)
+            .header("Accept", "application/json")
+            .json(body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("Ошибка запроса CurseForge API: {e}");
+                last_retry_after = None;
+                continue;
+            }
+        };
+        let status = resp.status();
+        if status.is_success() {
+            return resp
+                .json::<T>()
+                .await
+                .map_err(|e| format!("Ошибка разбора ответа CurseForge API: {e}"));
+        }
+        last_retry_after = parse_retry_after(&resp).or_else(|| rate_limit_pause(status));
+        let text = resp.text().await.unwrap_or_default();
+        last_err = format!("CurseForge API вернул ошибку {status}: {text}");
+        if status.as_u16() != 429 && !status.is_server_error() {
+            break;
+        }
+    }
+    Err(last_err)
+}
+
+pub(crate) async fn curseforge_get_files_bulk(
+    file_ids: &[u32],
+) -> Result<std::collections::HashMap<u32, CfFile>, String> {
+    let client = cf_client()?;
+    let mut out = std::collections::HashMap::new();
+    let mut last_err = None;
+    for chunk in file_ids.chunks(CF_BULK_CHUNK) {
+        match cf_post_json::<CfApiResponse<Vec<CfFile>>>(
+            &client,
+            "/mods/files",
+            &serde_json::json!({ "fileIds": chunk }),
+        )
+        .await
+        {
+            Ok(body) => {
+                for f in body.data {
+                    out.insert(f.id, f);
+                }
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    match last_err {
+        Some(e) if out.is_empty() => Err(e),
+        _ => Ok(out),
+    }
+}
+
+pub(crate) async fn curseforge_get_mod_class_ids(
+    mod_ids: &[u32],
+) -> Result<std::collections::HashMap<u32, u32>, String> {
+    let client = cf_client()?;
+    let mut out = std::collections::HashMap::new();
+    let mut last_err = None;
+    for chunk in mod_ids.chunks(CF_BULK_CHUNK) {
+        match cf_post_json::<CfApiResponse<Vec<CfModClass>>>(
+            &client,
+            "/mods",
+            &serde_json::json!({ "modIds": chunk }),
+        )
+        .await
+        {
+            Ok(body) => {
+                for m in body.data {
+                    if let Some(class_id) = m.class_id {
+                        out.insert(m.id, class_id);
+                    }
+                }
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    match last_err {
+        Some(e) if out.is_empty() => Err(e),
+        _ => Ok(out),
+    }
+}
+
+pub(crate) fn curseforge_cdn_fallback_urls(file_id: u32, file_name: &str) -> Vec<String> {
+    let name = urlencoding::encode(file_name);
+    let (a, b) = (file_id / 1000, file_id % 1000);
+    vec![
+        format!("https://edge.forgecdn.net/files/{a}/{b}/{name}"),
+        format!("https://mediafilez.forgecdn.net/files/{a}/{b}/{name}"),
+    ]
+}
+
+#[tauri::command]
+pub async fn curseforge_list_minecraft_versions() -> Result<Vec<String>, String> {
+    let client = cf_client()?;
+    let body: CfApiResponse<Vec<CfMinecraftVersion>> =
+        cf_get_json(&client, "/minecraft/version").await?;
+    let versions: Vec<String> = body
+        .data
+        .into_iter()
+        .map(|v| v.version_string)
+        .filter(|v| is_minecraft_release_version(v))
+        .collect();
+    Ok(versions)
+}
+
+fn normalize_cf_sort_field(sort_field: Option<u8>) -> u8 {
+    match sort_field {
+        Some(v @ (1 | 2 | 3 | 6 | 11)) => v,
+        _ => 6,
+    }
+}
+
+#[tauri::command]
+pub async fn curseforge_list_categories(
+    content_type: String,
+) -> Result<Vec<CurseforgeCategoryHit>, String> {
+    let class_id = class_id_for_content_type(&content_type)?;
+    let path = format!("/categories?gameId={MINECRAFT_GAME_ID}&classId={class_id}");
+    let client = cf_client()?;
+    let body: CfApiResponse<Vec<CfCategory>> = cf_get_json(&client, &path).await?;
+
+    let mut categories: Vec<CurseforgeCategoryHit> = body
+        .data
+        .into_iter()
+        .filter(|c| c.is_class != Some(true))
+        .filter(|c| c.id != class_id)
+        .filter(|c| {
+            c.class_id == Some(class_id)
+                || c.parent_category_id == Some(class_id)
+                || c.parent_category_id.is_none()
+        })
+        .map(|c| CurseforgeCategoryHit {
+            id: c.id,
+            name: c.name,
+            slug: c.slug,
+            icon_url: c.icon_url,
+        })
+        .collect();
+
+    categories.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    categories.dedup_by_key(|c| c.id);
+    Ok(categories)
+}
+
+#[tauri::command]
+pub async fn curseforge_search_mods(
+    content_type: String,
+    search_filter: String,
+    game_version: String,
+    loader: String,
+    index: u32,
+    page_size: u32,
+    sort_field: Option<u8>,
+    category_id: Option<u32>,
+) -> Result<CurseforgeSearchResult, String> {
+    let class_id = class_id_for_content_type(&content_type)?;
+    let page_size = page_size.clamp(1, 50);
+    let sort_field = normalize_cf_sort_field(sort_field);
+
+    let mut query = vec![
+        format!("gameId={MINECRAFT_GAME_ID}"),
+        format!("classId={class_id}"),
+        format!("index={index}"),
+        format!("pageSize={page_size}"),
+        format!("sortField={sort_field}"),
+        "sortOrder=desc".to_string(),
+    ];
+
+    let trimmed = search_filter.trim();
+    if !trimmed.is_empty() {
+        query.push(format!("searchFilter={}", urlencoding::encode(trimmed)));
+    }
+    if !game_version.trim().is_empty() {
+        query.push(format!(
+            "gameVersion={}",
+            urlencoding::encode(game_version.trim())
+        ));
+    }
+    if let Some(cat_id) = category_id {
+        if cat_id > 0 {
+            query.push(format!("categoryId={cat_id}"));
+        }
+    }
+    if content_type == "mod" {
+        if let Some(loader_type) = mod_loader_type(&loader) {
+            if !game_version.trim().is_empty() {
+                query.push(format!("modLoaderType={loader_type}"));
+            }
+        }
+    }
+
+    let path = format!("/mods/search?{}", query.join("&"));
+    let client = cf_client()?;
+    let body: CfSearchModsResponse = cf_get_json(&client, &path).await?;
+
+    let hits = body
+        .data
+        .into_iter()
+        .map(|m| {
+            let author = m
+                .authors
+                .first()
+                .map(|a| a.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            let thumbnail_url = m
+                .logo
+                .as_ref()
+                .and_then(|l| l.thumbnail_url.clone().or_else(|| l.url.clone()));
+            CurseforgeModHit {
+                id: m.id,
+                slug: m.slug,
+                name: m.name,
+                summary: m.summary,
+                download_count: m.download_count,
+                thumbnail_url,
+                author,
+                class_id: m.class_id,
+            }
+        })
+        .collect();
+
+    Ok(CurseforgeSearchResult {
+        hits,
+        index: body.pagination.index,
+        page_size: body.pagination.page_size,
+        total_count: body.pagination.total_count,
+    })
+}
+
+#[tauri::command]
+pub async fn curseforge_get_mod(mod_id: u32) -> Result<CurseforgeModDetails, String> {
+    let path = format!("/mods/{mod_id}");
+    let client = cf_client()?;
+    let body: CfApiResponse<CfMod> = cf_get_json(&client, &path).await?;
+    let m = body.data;
+    let author = m
+        .authors
+        .first()
+        .map(|a| a.name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
+    let thumbnail_url = m
+        .logo
+        .as_ref()
+        .and_then(|l| l.thumbnail_url.clone().or_else(|| l.url.clone()));
+    let links = m.links.unwrap_or(CfModLinks {
+        website_url: None,
+        wiki_url: None,
+        issues_url: None,
+        source_url: None,
+    });
+    let categories = m
+        .categories
+        .into_iter()
+        .map(|c| CurseforgeCategoryHit {
+            id: c.id,
+            name: c.name,
+            slug: c.slug,
+            icon_url: c.icon_url,
+        })
+        .collect();
+    let screenshots = m
+        .screenshots
+        .into_iter()
+        .filter_map(|s| {
+            let url = s.url.or(s.thumbnail_url)?.trim().to_string();
+            if url.is_empty() {
+                None
+            } else {
+                Some(CurseforgeScreenshot {
+                    url,
+                    title: s.title,
+                })
+            }
+        })
+        .collect();
+
+    Ok(CurseforgeModDetails {
+        id: m.id,
+        name: m.name,
+        summary: m.summary,
+        description: m.description,
+        download_count: m.download_count,
+        thumbnail_url,
+        author,
+        website_url: links.website_url,
+        wiki_url: links.wiki_url,
+        issues_url: links.issues_url,
+        source_url: links.source_url,
+        categories,
+        screenshots,
+    })
+}
+
+#[tauri::command]
+pub async fn curseforge_get_mod_files(
+    mod_id: u32,
+    game_version: String,
+    loader: String,
+) -> Result<Vec<CurseforgeFileHit>, String> {
+    let mut query = vec![format!("pageSize=50")];
+    if !game_version.trim().is_empty() {
+        query.push(format!(
+            "gameVersion={}",
+            urlencoding::encode(game_version.trim())
+        ));
+    }
+    if let Some(loader_type) = mod_loader_type(&loader) {
+        if !game_version.trim().is_empty() {
+            query.push(format!("modLoaderType={loader_type}"));
+        }
+    }
+
+    let path = format!("/mods/{mod_id}/files?{}", query.join("&"));
+    let client = cf_client()?;
+    let body: CfModFilesResponse = cf_get_json(&client, &path).await?;
+
+    let mut files: Vec<CurseforgeFileHit> = body
+        .data
+        .into_iter()
+        .map(|f| {
+            let loaders = loaders_from_filename(&f.file_name);
+            let release_type = f.channel();
+            CurseforgeFileHit {
+                id: f.id,
+                display_name: f.display_name,
+                file_name: f.file_name,
+                download_url: f.download_url,
+                game_versions: if f.game_versions.is_empty() {
+                    f.sortable_game_versions
+                        .into_iter()
+                        .filter_map(|v| v.game_version)
+                        .collect()
+                } else {
+                    f.game_versions
+                },
+                loaders,
+                file_date: f.file_date,
+                release_type,
+            }
+        })
+        .collect();
+
+    files.sort_by(|a, b| b.file_date.cmp(&a.file_date));
+    Ok(files)
+}
+
+pub(crate) async fn curseforge_get_file(mod_id: u32, file_id: u32) -> Result<CfFile, String> {
+    let client = cf_client()?;
+    let path = format!("/mods/{mod_id}/files/{file_id}");
+    let body: CfApiResponse<CfFile> = cf_get_json(&client, &path).await?;
+    Ok(body.data)
+}
+
+pub(crate) async fn curseforge_resolve_download_url(mod_id: u32, file_id: u32) -> Result<String, String> {
+    let client = cf_client()?;
+    let path = format!("/mods/{mod_id}/files/{file_id}/download-url");
+    let body: CfApiResponse<String> = cf_get_json(&client, &path).await?;
+    let url = body.data.trim().to_string();
+    if url.is_empty() {
+        return Err("CurseForge не вернул ссылку на скачивание.".to_string());
+    }
+    Ok(url)
+}
+
+#[tauri::command]
+pub async fn download_curseforge_file(
+    mod_id: u32,
+    file_id: u32,
+    category: String,
+    filename: String,
+    profile_id: Option<String>,
+) -> Result<(), String> {
+    let root = if let Some(ref id) = profile_id {
+        instance_dir(id)?
+    } else {
+        game_root_dir()?
+    };
+    let subdir = match category.as_str() {
+        "mod" | "mods" => "mods",
+        "resourcepack" | "resourcepacks" => "resourcepacks",
+        "shader" | "shaderpack" | "shaderpacks" => "shaderpacks",
+        "modpack" | "modpacks" => "modpacks",
+        other => {
+            return Err(format!(
+                "Неизвестный тип контента CurseForge: {other}. Ожидается mod, resourcepack, shader или modpack."
+            ))
+        }
+    };
+
+    let target_dir = root.join(subdir);
+    tokio::fs::create_dir_all(&target_dir)
+        .await
+        .map_err(|e| format!("Не удалось создать папку '{subdir}': {e}"))?;
+
+    let safe_name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| format!("Некорректное имя файла: {filename}"))?;
+    let dest_path = target_dir.join(safe_name);
+
+    let mut urls = Vec::new();
+    if let Ok(url) = curseforge_resolve_download_url(mod_id, file_id).await {
+        urls.push(url);
+    }
+    urls.extend(curseforge_cdn_fallback_urls(file_id, safe_name));
+
+    let client = http_client_for_binary_download(false);
+    fetch_verified(&client, &urls, &dest_path, None, None)
+        .await
+        .map_err(|e| format!("Ошибка загрузки файла CurseForge ({safe_name}): {e}"))?;
+
+    if profile_id.is_some() && subdir != "modpacks" {
+        crate::services::modrinth::record_installed_item_sources(
+            &root,
+            subdir,
+            "curseforge",
+            vec![(safe_name.to_string(), mod_id.to_string())],
+        )
+        .await;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dotenv_preserves_curseforge_key_with_dollar_signs() {
+        let dir = std::env::temp_dir().join(format!("cf_dotenv_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tmpdir");
+        let path = dir.join(".env");
+        let raw_key = "$2a$10$abcdefghijklmnopqrstuvwxyz0123456789abcd";
+        std::fs::write(
+            &path,
+            format!("CURSEFORGE_API_KEY='{raw_key}'\n"),
+        )
+        .expect("write env");
+        std::env::remove_var("CURSEFORGE_API_KEY");
+        dotenvy::from_path_override(&path).expect("load env");
+        let loaded = std::env::var("CURSEFORGE_API_KEY").expect("var");
+        assert_eq!(loaded, raw_key);
+        std::env::remove_var("CURSEFORGE_API_KEY");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn deserializes_curseforge_file_camel_case() {
+        let json = r#"{
+            "id": 1,
+            "displayName": "JEI 1.20.1",
+            "fileName": "jei.jar",
+            "downloadUrl": "https://edge.forgecdn.net/files/1/2/jei.jar",
+            "gameVersions": ["1.20.1"],
+            "fileDate": "2024-01-01T00:00:00Z"
+        }"#;
+        let file: CfFile = serde_json::from_str(json).expect("parse file");
+        assert_eq!(file.display_name, "JEI 1.20.1");
+        assert_eq!(
+            file.download_url.as_deref(),
+            Some("https://edge.forgecdn.net/files/1/2/jei.jar")
+        );
+    }
+}

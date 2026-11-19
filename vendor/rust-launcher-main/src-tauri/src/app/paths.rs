@@ -1,0 +1,186 @@
+use std::path::{Path, PathBuf};
+
+use crate::app::game_data_migrate::{
+    game_root_from_directory_setting, migrate_between_game_roots, migrate_game_data_if_needed,
+};
+use crate::infra::fs_atomic::backup_path_for;
+use crate::models::profile::InstanceConfig;
+use crate::services::game::settings as settings_service;
+
+//корневая папка данных лаунчера (…/16Launcher)
+pub fn launcher_data_dir() -> Result<PathBuf, String> {
+    if let Some(path) = crate::bridge::data_dir() { return Ok(path); }
+    dirs::data_dir()
+        .ok_or_else(|| "Не удалось получить папку данных".to_string())
+        .map(|p| p.join("16Launcher"))
+}
+
+pub fn profile_path() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("profile.json"))
+}
+
+pub fn launcher_accounts_path() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("accounts.json"))
+}
+
+pub fn launcher_secrets_path() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("secrets.vault"))
+}
+
+#[cfg(windows)]
+pub fn launcher_secrets_key_path() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("secrets.key"))
+}
+
+pub fn default_game_root_dir() -> Result<PathBuf, String> {
+    game_root_from_directory_setting(None)
+}
+
+pub fn game_root_dir() -> Result<PathBuf, String> {
+    if let Some(path) = crate::bridge::game_dir() { return Ok(path); }
+    let settings = settings_service::load_settings_from_disk();
+    game_root_from_directory_setting(settings.game_directory.as_deref())
+}
+
+pub fn legacy_instances_root_dir() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("instances"))
+}
+
+pub fn legacy_runtimes_dir() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("runtimes"))
+}
+
+pub fn legacy_forge_installers_dir() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("forge_installers"))
+}
+
+pub fn ensure_game_data_layout() -> Result<(), String> {
+    let target = game_root_dir()?;
+    let default_game = default_game_root_dir()?;
+
+    migrate_game_data_if_needed(
+        &target,
+        &legacy_instances_root_dir()?,
+        &legacy_runtimes_dir()?,
+        &legacy_forge_installers_dir()?,
+    )?;
+
+    if default_game != target && default_game.is_dir() {
+        migrate_between_game_roots(&default_game, &target)?;
+    }
+
+    Ok(())
+}
+
+pub fn migrate_game_directory_change(
+    old_game_directory: Option<&str>,
+    new_game_directory: Option<&str>,
+) -> Result<(), String> {
+    let from = game_root_from_directory_setting(old_game_directory)?;
+    let to = game_root_from_directory_setting(new_game_directory)?;
+    if from != to {
+        migrate_between_game_roots(&from, &to)?;
+    }
+    ensure_game_data_layout()
+}
+
+pub fn libraries_dir() -> Result<PathBuf, String> {
+    Ok(game_root_dir()?.join("libraries"))
+}
+
+pub fn versions_dir() -> Result<PathBuf, String> {
+    Ok(game_root_dir()?.join("versions"))
+}
+
+pub fn instances_root_dir() -> Result<PathBuf, String> {
+    Ok(game_root_dir()?.join("instances"))
+}
+
+fn try_parse_instance_config(cfg_path: &Path) -> Option<InstanceConfig> {
+    if let Ok(text) = std::fs::read_to_string(cfg_path) {
+        if !text.trim().is_empty() {
+            if let Ok(cfg) = serde_json::from_str::<InstanceConfig>(&text) {
+                return Some(cfg);
+            }
+        }
+    }
+    let bak = backup_path_for(cfg_path);
+    std::fs::read_to_string(bak)
+        .ok()
+        .filter(|t| !t.trim().is_empty())
+        .and_then(|t| serde_json::from_str::<InstanceConfig>(&t).ok())
+}
+
+pub fn instance_dir(id: &str) -> Result<PathBuf, String> {
+    if let Some(path) = crate::bridge::profile_dir(id) { return Ok(path); }
+    let root = instances_root_dir()?;
+    let legacy = root.join(id);
+    if legacy.is_dir() {
+        return Ok(legacy);
+    }
+
+    if !root.is_dir() {
+        return Ok(legacy);
+    }
+
+    let entries = std::fs::read_dir(&root)
+        .map_err(|e| format!("Ошибка чтения папки instances: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Ошибка чтения entry instances: {e}"))?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let cfg_path = path.join("config.json");
+        if !cfg_path.is_file() && !backup_path_for(&cfg_path).is_file() {
+            continue;
+        }
+        let Some(cfg) = try_parse_instance_config(&cfg_path) else {
+            continue;
+        };
+        if cfg.id == id {
+            return Ok(path);
+        }
+    }
+
+    Ok(legacy)
+}
+
+pub fn instance_dir_for_id(id: &str) -> Result<PathBuf, String> {
+    instance_dir(id)
+}
+
+pub fn instance_config_path(id: &str) -> Result<PathBuf, String> {
+    if let Some(path) = crate::bridge::metadata(id, "config.json") { return Ok(path); }
+    Ok(instance_dir(id)?.join("config.json"))
+}
+
+pub fn instance_settings_path(id: &str) -> Result<PathBuf, String> {
+    if let Some(path) = crate::bridge::metadata(id, "settings.json") { return Ok(path); }
+    Ok(instance_dir(id)?.join("settings.json"))
+}
+
+pub fn selected_profile_path() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("selected_profile.json"))
+}
+
+pub fn build_presets_path() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("build_presets.json"))
+}
+
+pub fn launch_hooks_path() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("launch_hooks.json"))
+}
+
+pub fn lazy_mods_path() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("lazy_mods.json"))
+}
+
+pub fn build_preset_icons_dir() -> Result<PathBuf, String> {
+    Ok(launcher_data_dir()?.join("build_preset_icons"))
+}
+
+pub fn build_preset_icon_path(preset_id: &str) -> Result<PathBuf, String> {
+    Ok(build_preset_icons_dir()?.join(format!("{preset_id}.png")))
+}
+

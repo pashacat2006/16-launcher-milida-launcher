@@ -1,0 +1,708 @@
+import type { ConnectionType, IceCandidateDto } from "../ws";
+import { fetchIceServers, fetchTurnCredentials } from "../rtc";
+
+export type PeerSessionStatus =
+  | "idle"
+  | "preparing"
+  | "connecting"
+  | "connected"
+  | "failed"
+  | "closed";
+
+export type PeerSessionCallbacks = {
+  onLocalIce: (candidate: IceCandidateDto) => void;
+  onLocalOffer: (sdp: string) => void;
+  onLocalAnswer: (sdp: string) => void;
+  onStatus: (status: PeerSessionStatus) => void;
+  onConnectionType?: (type: ConnectionType) => void;
+  onChannelOpen?: () => void;
+};
+
+export const LAN_TUNNEL_CAPABILITY = "mux:1";
+export const ROOM_FILES_CAPABILITY = "files:1";
+const FILES_CHANNEL_ID = 100;
+
+const RTT_PING_PREFIX = "rtt:";
+const RTT_PONG_PREFIX = "rtt-ack:";
+const RTT_TIMEOUT_MS = 8_000;
+const ROOM_STATE_PREFIX = "room-state:";
+
+const ICE_RESTART_DELAY_MS = 3_000;
+const ICE_RESTART_MAX_ATTEMPTS = 3;
+const ICE_RECOVERY_TIMEOUT_MS = 18_000;
+
+function urlList(urls: string | string[]): string[] {
+  return Array.isArray(urls) ? urls : [urls];
+}
+
+function hasTurnUrl(urls: string | string[]): boolean {
+  return urlList(urls).some((u) => u.startsWith("turn:") || u.startsWith("turns:"));
+}
+
+function expandTurnTransports(urls: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (u: string) => {
+    if (seen.has(u)) return;
+    seen.add(u);
+    out.push(u);
+  };
+  for (const raw of urls) {
+    if (!raw.startsWith("turn:") || /[?&]transport=/i.test(raw)) {
+      add(raw);
+      continue;
+    }
+    const join = raw.includes("?") ? "&" : "?";
+    add(`${raw}${join}transport=udp`);
+    add(`${raw}${join}transport=tcp`);
+  }
+  return out;
+}
+
+function hasStunUrl(urls: string | string[]): boolean {
+  return urlList(urls).some((u) => u.startsWith("stun:"));
+}
+
+const ICE_CACHE_MS = 60_000;
+let iceCache: { servers: RTCIceServer[]; turnOk: boolean; at: number } | null = null;
+
+export function lastTurnAvailable(): boolean {
+  return iceCache?.turnOk === true;
+}
+
+export function invalidateIceCache(): void {
+  iceCache = null;
+}
+
+async function buildIceServers(): Promise<{ servers: RTCIceServer[]; turnOk: boolean }> {
+  if (iceCache && Date.now() - iceCache.at < ICE_CACHE_MS) {
+    return iceCache;
+  }
+
+  const servers: RTCIceServer[] = [];
+  let turnOk = false;
+
+  try {
+    const turn = await fetchTurnCredentials();
+    if (turn.urls?.length) {
+      servers.push({
+        urls: expandTurnTransports(turn.urls),
+        username: turn.username,
+        credential: turn.password,
+      });
+      turnOk = hasTurnUrl(turn.urls);
+    }
+  } catch (err) {
+    console.warn("[webrtc] GET /network/turn failed", err);
+  }
+
+  try {
+    const ice = await fetchIceServers();
+    for (const s of ice.ice_servers) {
+      if (turnOk && hasTurnUrl(s.urls)) continue;
+      servers.push({
+        urls: s.urls,
+        username: s.username ?? undefined,
+        credential: s.credential ?? undefined,
+      });
+      if (!turnOk && hasTurnUrl(s.urls) && s.credential) turnOk = true;
+    }
+  } catch (err) {
+    console.warn("[webrtc] GET /rtc/ice-servers failed", err);
+  }
+
+  if (servers.length === 0) {
+    servers.push(
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+    );
+  } else if (!servers.some((s) => hasStunUrl(s.urls))) {
+    servers.unshift({ urls: "stun:stun.l.google.com:19302" });
+  }
+
+  if (!turnOk) {
+    console.warn(
+      "[webrtc] TURN credentials unavailable — CGNAT/symmetric NAT will stay on connecting (set TURN_HOST + start coturn)",
+    );
+  } else {
+    console.info("[webrtc] TURN ready", {
+      urls: servers.flatMap((s) => urlList(s.urls)).filter((u) => hasTurnUrl(u)),
+    });
+  }
+
+  if (turnOk) {
+    iceCache = { servers, turnOk, at: Date.now() };
+  }
+  return { servers, turnOk };
+}
+
+async function selectedPairIsRelayed(pc: RTCPeerConnection): Promise<boolean> {
+  try {
+    const stats = await pc.getStats();
+    let pairId: string | null = null;
+    const pairs = new Map<string, RTCStats>();
+    const candidates = new Map<string, RTCStats>();
+    stats.forEach((report) => {
+      if (report.type === "transport") {
+        const t = report as RTCStats & { selectedCandidatePairId?: string };
+        if (t.selectedCandidatePairId) pairId = t.selectedCandidatePairId;
+      }
+      if (report.type === "candidate-pair") pairs.set(report.id, report);
+      if (report.type === "local-candidate" || report.type === "remote-candidate") {
+        candidates.set(report.id, report);
+      }
+    });
+    const pair = (pairId ? pairs.get(pairId) : undefined) ??
+      [...pairs.values()].find((p) => (p as { state?: string; nominated?: boolean }).state === "succeeded");
+    if (!pair) return true;
+    const { localCandidateId, remoteCandidateId } = pair as {
+      localCandidateId?: string;
+      remoteCandidateId?: string;
+    };
+    return [localCandidateId, remoteCandidateId].some(
+      (id) => (candidates.get(id ?? "") as { candidateType?: string } | undefined)?.candidateType === "relay",
+    );
+  } catch {
+    return true;
+  }
+}
+
+async function detectConnectionType(pc: RTCPeerConnection): Promise<ConnectionType> {
+  try {
+    const stats = await pc.getStats();
+    let selectedPairId: string | null = null;
+    const pairs = new Map<string, RTCStats>();
+    const locals = new Map<string, RTCStats>();
+
+    stats.forEach((report) => {
+      if (report.type === "transport") {
+        const t = report as RTCStats & { selectedCandidatePairId?: string };
+        if (t.selectedCandidatePairId) selectedPairId = t.selectedCandidatePairId;
+      }
+      if (report.type === "candidate-pair") pairs.set(report.id, report);
+      if (report.type === "local-candidate") locals.set(report.id, report);
+    });
+
+    const pair = selectedPairId
+      ? pairs.get(selectedPairId)
+      : [...pairs.values()].find((p) => (p as { state?: string }).state === "succeeded");
+
+    if (pair) {
+      const localId = (pair as { localCandidateId?: string }).localCandidateId;
+      const local = localId ? locals.get(localId) : undefined;
+      const candidateType = (local as { candidateType?: string } | undefined)?.candidateType;
+      if (candidateType === "relay") return "relay";
+    }
+  } catch {
+  }
+  return "direct";
+}
+
+export class RoomPeerSession {
+  private pc: RTCPeerConnection | null = null;
+  private channel: RTCDataChannel | null = null;
+  private readonly roomId: string;
+  private readonly localUserId: string;
+  private readonly remoteUserId: string;
+  private readonly isHost: boolean;
+  private readonly iceTransportPolicy: RTCIceTransportPolicy;
+  private readonly callbacks: PeerSessionCallbacks;
+  private closed = false;
+  private remoteBinaryHandlers = new Set<(data: ArrayBuffer) => void>();
+  private pendingRemoteOffer: string | null = null;
+  private pendingRemoteIce: IceCandidateDto[] = [];
+  private remoteTunnelCapable = false;
+  private iceRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private iceRestartAttempts = 0;
+  private latestRttMs: number | null = null;
+  private pendingRtt: { id: string; sentAt: number } | null = null;
+  private rttSeq = 0;
+  private roomStateHandlers = new Set<(json: string) => void>();
+  private filesChannel: RTCDataChannel | null = null;
+  private remoteFilesCapable = false;
+  private filesHandlers = new Set<(data: string | ArrayBuffer) => void>();
+
+  constructor(opts: {
+    roomId: string;
+    localUserId: string;
+    remoteUserId: string;
+    isHost: boolean;
+    iceTransportPolicy?: RTCIceTransportPolicy;
+    callbacks: PeerSessionCallbacks;
+  }) {
+    this.roomId = opts.roomId;
+    this.localUserId = opts.localUserId;
+    this.remoteUserId = opts.remoteUserId;
+    this.isHost = opts.isHost;
+    this.iceTransportPolicy = opts.iceTransportPolicy ?? "all";
+    this.callbacks = opts.callbacks;
+  }
+
+  get peerId(): string {
+    return this.remoteUserId;
+  }
+
+  get room(): string {
+    return this.roomId;
+  }
+
+  get channelOpen(): boolean {
+    return this.channel?.readyState === "open";
+  }
+
+  get supportsLanTunnel(): boolean {
+    return this.remoteTunnelCapable;
+  }
+
+  get rttMs(): number | null {
+    return this.latestRttMs;
+  }
+
+  probeRtt(): void {
+    if (this.channel?.readyState !== "open") {
+      this.latestRttMs = null;
+      this.pendingRtt = null;
+      return;
+    }
+    const now = performance.now();
+    if (this.pendingRtt) {
+      if (now - this.pendingRtt.sentAt < RTT_TIMEOUT_MS) return;
+      this.latestRttMs = null;
+    }
+    this.rttSeq += 1;
+    const id = String(this.rttSeq);
+    this.pendingRtt = { id, sentAt: now };
+    try {
+      this.channel.send(`${RTT_PING_PREFIX}${id}`);
+    } catch {
+      this.pendingRtt = null;
+    }
+  }
+
+  get supportsRoomFiles(): boolean {
+    return this.remoteFilesCapable && this.filesChannel?.readyState === "open";
+  }
+
+  get filesBufferedAmount(): number {
+    return this.filesChannel?.bufferedAmount ?? Number.MAX_SAFE_INTEGER;
+  }
+
+  sendFiles(data: string | ArrayBuffer): boolean {
+    if (this.filesChannel?.readyState !== "open") return false;
+    try {
+      if (typeof data === "string") this.filesChannel.send(data);
+      else this.filesChannel.send(data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  onFiles(handler: (data: string | ArrayBuffer) => void): () => void {
+    this.filesHandlers.add(handler);
+    return () => {
+      this.filesHandlers.delete(handler);
+    };
+  }
+
+  async isRelayed(): Promise<boolean> {
+    return this.pc ? selectedPairIsRelayed(this.pc) : true;
+  }
+
+  private wireFilesChannel(channel: RTCDataChannel) {
+    channel.binaryType = "arraybuffer";
+    channel.onmessage = (ev) => {
+      const data = typeof ev.data === "string" || ev.data instanceof ArrayBuffer ? ev.data : null;
+      if (data == null) return;
+      for (const h of this.filesHandlers) h(data);
+    };
+  }
+
+  sendRoomState(json: string): void {
+    if (this.channel?.readyState !== "open") return;
+    try {
+      this.channel.send(`${ROOM_STATE_PREFIX}${json}`);
+    } catch {
+    }
+  }
+
+  onRoomState(handler: (json: string) => void): () => void {
+    this.roomStateHandlers.add(handler);
+    return () => {
+      this.roomStateHandlers.delete(handler);
+    };
+  }
+
+  private handleControlMessage(channel: RTCDataChannel, message: string): void {
+    if (message === LAN_TUNNEL_CAPABILITY) {
+      this.remoteTunnelCapable = true;
+    } else if (message === ROOM_FILES_CAPABILITY) {
+      this.remoteFilesCapable = true;
+    } else if (message.startsWith(RTT_PING_PREFIX)) {
+      try {
+        channel.send(`${RTT_PONG_PREFIX}${message.slice(RTT_PING_PREFIX.length)}`);
+      } catch {
+      }
+    } else if (message.startsWith(RTT_PONG_PREFIX)) {
+      const pending = this.pendingRtt;
+      if (pending && pending.id === message.slice(RTT_PONG_PREFIX.length)) {
+        this.latestRttMs = performance.now() - pending.sentAt;
+        this.pendingRtt = null;
+      }
+    } else if (message.startsWith(ROOM_STATE_PREFIX)) {
+      const json = message.slice(ROOM_STATE_PREFIX.length);
+      for (const h of this.roomStateHandlers) h(json);
+    }
+  }
+
+  async start(): Promise<void> {
+    if (this.closed) return;
+    this.callbacks.onStatus("preparing");
+    const { servers: iceServers, turnOk } = await buildIceServers();
+    if (this.closed) return;
+    const policy =
+      this.iceTransportPolicy === "relay" && turnOk ? "relay" : "all";
+    if (this.iceTransportPolicy === "relay" && !turnOk) {
+      console.warn("[webrtc] relay requested but TURN is unavailable");
+    }
+    console.info("[webrtc] start", {
+      peer: this.remoteUserId,
+      iceTransportPolicy: policy,
+      turn: turnOk,
+    });
+    const pc = new RTCPeerConnection({
+      iceServers,
+      iceTransportPolicy: policy,
+      iceCandidatePoolSize: turnOk ? 1 : 0,
+    });
+    this.pc = pc;
+    this.filesChannel = pc.createDataChannel("mc16-files", {
+      negotiated: true,
+      id: FILES_CHANNEL_ID,
+      ordered: true,
+    });
+    this.wireFilesChannel(this.filesChannel);
+
+    pc.onicecandidate = (ev) => {
+      if (!ev.candidate) {
+        console.info("[webrtc] ice gathering complete", { peer: this.remoteUserId });
+        return;
+      }
+      const typ = ev.candidate.type;
+      if (typ === "relay") {
+        console.info("[webrtc] relay candidate", { peer: this.remoteUserId, protocol: ev.candidate.protocol });
+      }
+      this.callbacks.onLocalIce({
+        candidate: ev.candidate.candidate,
+        sdp_mid: ev.candidate.sdpMid,
+        sdp_m_line_index:
+          ev.candidate.sdpMLineIndex == null ? null : ev.candidate.sdpMLineIndex,
+      });
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (this.pc !== pc) return;
+      const state = pc.connectionState;
+      if (state === "connected") {
+        this.clearRecoveryTimers();
+        this.iceRestartAttempts = 0;
+        this.callbacks.onStatus("connected");
+        void detectConnectionType(pc).then((t) => this.callbacks.onConnectionType?.(t));
+      } else if (state === "failed" || state === "disconnected") {
+        this.onLinkDegraded(state);
+      } else if (state === "connecting") {
+        this.callbacks.onStatus("connecting");
+      } else if (state === "closed") {
+        if (!this.closed) this.callbacks.onStatus("closed");
+      }
+    };
+
+    if (this.isHost) {
+      this.channel = pc.createDataChannel("mc16", { ordered: true });
+      this.wireChannel(this.channel);
+      this.callbacks.onStatus("preparing");
+    } else {
+      pc.ondatachannel = (ev) => {
+        this.channel = ev.channel;
+        this.wireChannel(this.channel);
+      };
+      if (this.pendingRemoteOffer) {
+        const pendingOffer = this.pendingRemoteOffer;
+        this.pendingRemoteOffer = null;
+        await this.handleRemoteOffer(pendingOffer);
+      }
+    }
+
+    if (this.pendingRemoteIce.length > 0) {
+      const pendingIce = [...this.pendingRemoteIce];
+      this.pendingRemoteIce = [];
+      for (const candidate of pendingIce) {
+        await this.handleRemoteIce(candidate);
+      }
+    }
+  }
+
+  private async createAndSendOffer(): Promise<void> {
+    if (!this.pc || this.closed || !this.isHost) return;
+    const offer = await this.pc.createOffer();
+    if (this.closed || !this.pc) return;
+    await this.pc.setLocalDescription(offer);
+    if (offer.sdp) this.callbacks.onLocalOffer(offer.sdp);
+    this.callbacks.onStatus("connecting");
+  }
+
+  async renegotiateOffer(): Promise<"resent" | "restart" | "noop"> {
+    if (!this.isHost || this.closed || !this.pc) return "noop";
+    if (this.channel?.readyState === "open") return "noop";
+
+    if (!this.pc.remoteDescription) {
+      try {
+        await this.createAndSendOffer();
+        return "resent";
+      } catch {
+        return "restart";
+      }
+    }
+
+    const conn = this.pc.connectionState;
+    if (conn === "failed" || conn === "disconnected" || conn === "closed") {
+      return "restart";
+    }
+    return "noop";
+  }
+
+  private clearRecoveryTimers(): void {
+    if (this.iceRestartTimer) {
+      clearTimeout(this.iceRestartTimer);
+      this.iceRestartTimer = null;
+    }
+    if (this.recoveryTimer) {
+      clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = null;
+    }
+  }
+
+  private onLinkDegraded(state: "disconnected" | "failed"): void {
+    if (!this.channelOpen) {
+      this.callbacks.onStatus(state === "failed" ? "failed" : "connecting");
+      return;
+    }
+    this.callbacks.onStatus("connecting");
+
+    if (this.isHost && this.iceRestartAttempts < ICE_RESTART_MAX_ATTEMPTS) {
+      if (state === "failed" && this.iceRestartTimer) {
+        clearTimeout(this.iceRestartTimer);
+        this.iceRestartTimer = null;
+      }
+      if (!this.iceRestartTimer) {
+        this.iceRestartTimer = setTimeout(
+          () => {
+            this.iceRestartTimer = null;
+            const conn = this.pc?.connectionState;
+            if (conn === "disconnected" || conn === "failed") void this.restartIce();
+          },
+          state === "failed" ? 0 : ICE_RESTART_DELAY_MS,
+        );
+      }
+    }
+
+    if (!this.recoveryTimer) {
+      this.recoveryTimer = setTimeout(() => {
+        this.recoveryTimer = null;
+        if (this.closed || this.pc?.connectionState === "connected") return;
+        console.warn("[webrtc] link did not recover, recreating", { peer: this.remoteUserId });
+        this.abort();
+      }, ICE_RECOVERY_TIMEOUT_MS);
+    }
+  }
+
+  private async restartIce(): Promise<void> {
+    const pc = this.pc;
+    if (!this.isHost || !pc || this.closed) return;
+    this.iceRestartAttempts += 1;
+    console.info("[webrtc] ICE restart", {
+      peer: this.remoteUserId,
+      attempt: this.iceRestartAttempts,
+    });
+    try {
+      if (pc.signalingState === "have-local-offer") {
+        await pc.setLocalDescription({ type: "rollback" });
+      }
+      const offer = await pc.createOffer({ iceRestart: true });
+      if (this.closed || this.pc !== pc) return;
+      await pc.setLocalDescription(offer);
+      if (offer.sdp) this.callbacks.onLocalOffer(offer.sdp);
+    } catch (err) {
+      console.warn("[webrtc] ICE restart failed", err);
+    }
+  }
+
+  private abort(): void {
+    this.clearRecoveryTimers();
+    try {
+      this.channel?.close();
+      this.filesChannel?.close();
+    } catch {
+    }
+    try {
+      this.pc?.close();
+    } catch {
+    }
+    this.callbacks.onStatus("failed");
+  }
+
+  private wireChannel(channel: RTCDataChannel) {
+    channel.binaryType = "arraybuffer";
+    channel.bufferedAmountLowThreshold = 256 * 1024;
+    channel.onopen = () => {
+      try {
+        channel.send(`ping:${this.localUserId}`);
+        channel.send(LAN_TUNNEL_CAPABILITY);
+        channel.send(ROOM_FILES_CAPABILITY);
+      } catch {
+      }
+      this.callbacks.onChannelOpen?.();
+    };
+    channel.onclose = () => {
+      if (this.closed || this.channel !== channel) return;
+      this.clearRecoveryTimers();
+      this.callbacks.onStatus("closed");
+    };
+    channel.onmessage = (ev) => {
+      if (typeof ev.data === "string") {
+        this.handleControlMessage(channel, ev.data);
+        return;
+      }
+      if (!this.remoteTunnelCapable) return;
+      if (ev.data instanceof ArrayBuffer) {
+        for (const h of this.remoteBinaryHandlers) h(ev.data);
+      } else if (ArrayBuffer.isView(ev.data)) {
+        const view = ev.data as ArrayBufferView;
+        const copy = new Uint8Array(view.byteLength);
+        copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+        for (const h of this.remoteBinaryHandlers) h(copy.buffer as ArrayBuffer);
+      }
+    };
+  }
+
+  static readonly BUFFERED_AMOUNT_HIGH = 2 * 1024 * 1024;
+
+  get bufferedAmount(): number {
+    return this.channel?.bufferedAmount ?? Number.MAX_SAFE_INTEGER;
+  }
+
+  get canSendBinary(): boolean {
+    return (
+      !!this.channel &&
+      this.channel.readyState === "open" &&
+      this.channel.bufferedAmount < RoomPeerSession.BUFFERED_AMOUNT_HIGH
+    );
+  }
+
+  sendBinary(data: ArrayBuffer): boolean {
+    if (!this.canSendBinary || !this.channel) return false;
+    try {
+      this.channel.send(data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  onRemoteBinary(handler: (data: ArrayBuffer) => void): () => void {
+    this.remoteBinaryHandlers.add(handler);
+    return () => {
+      this.remoteBinaryHandlers.delete(handler);
+    };
+  }
+
+  private async drainPendingIce(): Promise<void> {
+    if (!this.pc?.remoteDescription) return;
+    const pending = this.pendingRemoteIce.splice(0);
+    for (const candidate of pending) {
+      try {
+        await this.pc.addIceCandidate({
+          candidate: candidate.candidate,
+          sdpMid: candidate.sdp_mid ?? undefined,
+          sdpMLineIndex: candidate.sdp_m_line_index ?? undefined,
+        });
+      } catch {
+      }
+    }
+  }
+
+  async handleRemoteOffer(sdp: string): Promise<void> {
+    if (this.isHost) return;
+    if (!this.pc) {
+      this.pendingRemoteOffer = sdp;
+      return;
+    }
+    const restart = this.channel?.readyState === "open";
+    if (restart && this.pc.signalingState !== "stable") return;
+    try {
+      await this.pc.setRemoteDescription({ type: "offer", sdp });
+      await this.drainPendingIce();
+      const answer = await this.pc.createAnswer();
+      await this.pc.setLocalDescription(answer);
+      if (answer.sdp) this.callbacks.onLocalAnswer(answer.sdp);
+      if (!restart) this.callbacks.onStatus("connecting");
+    } catch {
+      if (restart) this.abort();
+      else this.callbacks.onStatus("failed");
+    }
+  }
+
+  async handleRemoteAnswer(sdp: string): Promise<void> {
+    if (!this.pc || !this.isHost) return;
+    try {
+      if (this.pc.signalingState !== "have-local-offer") return;
+      await this.pc.setRemoteDescription({ type: "answer", sdp });
+      await this.drainPendingIce();
+    } catch {
+      if (this.channelOpen) this.abort();
+      else this.callbacks.onStatus("failed");
+    }
+  }
+
+  async handleRemoteIce(candidate: IceCandidateDto): Promise<void> {
+    if (!this.pc || !this.pc.remoteDescription) {
+      this.pendingRemoteIce.push(candidate);
+      return;
+    }
+    try {
+      await this.pc.addIceCandidate({
+        candidate: candidate.candidate,
+        sdpMid: candidate.sdp_mid ?? undefined,
+        sdpMLineIndex: candidate.sdp_m_line_index ?? undefined,
+      });
+    } catch {
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    this.clearRecoveryTimers();
+    this.remoteBinaryHandlers.clear();
+    this.roomStateHandlers.clear();
+    this.filesHandlers.clear();
+    this.latestRttMs = null;
+    this.pendingRtt = null;
+    try {
+      this.channel?.close();
+    } catch {
+    }
+    try {
+      this.pc?.close();
+    } catch {
+    }
+    try {
+      this.filesChannel?.close();
+    } catch {
+    }
+    this.pc = null;
+    this.channel = null;
+    this.filesChannel = null;
+    this.callbacks.onStatus("closed");
+  }
+}

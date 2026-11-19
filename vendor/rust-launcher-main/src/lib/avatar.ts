@@ -1,0 +1,404 @@
+export type ProfileAvatarInput = {
+  nickname: string;
+  ely_username: string | null;
+  ely_uuid: string | null;
+  mc_uuid: string | null;
+};
+
+export function buildInitialAvatarDataUrl(label: string): string {
+  const ch = (label.trim().charAt(0) || "?").toUpperCase();
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b2648"/>
+      <stop offset="100%" stop-color="#102f55"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="32" fill="url(#g)"/>
+  <text x="50%" y="53%" dominant-baseline="middle" text-anchor="middle" fill="#d7e7ff" font-family="Inter,Segoe UI,Arial" font-size="28" font-weight="700">${ch}</text>
+</svg>
+`.trim();
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+type AvatarCacheEntry = {
+  src: string;
+  expiresAt: number;
+  fetchedAt: number;
+};
+
+type ElyAvatarCommandResponse = string | null;
+
+const AVATAR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const ELY_AVATAR_FRESH_MS = 10 * 60 * 1000;
+const ELY_AVATAR_CACHE_PREFIX = "ely_avatar_cache_v1:";
+const memoryCache = new Map<string, AvatarCacheEntry>();
+const elyAvatarRequests = new Map<string, Promise<string | null>>();
+let elyAvatarsStaleBefore = 0;
+
+export function markElyAvatarsStale(): void {
+  elyAvatarsStaleBefore = Date.now();
+}
+
+function normalizeCacheKey(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+function getDiskCache(cacheKey: string): AvatarCacheEntry | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(`${ELY_AVATAR_CACHE_PREFIX}${cacheKey}`);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const entry = parsed as Partial<AvatarCacheEntry>;
+    if (typeof entry.src !== "string" || typeof entry.expiresAt !== "number") return null;
+    if (entry.expiresAt <= Date.now()) {
+      window.localStorage.removeItem(`${ELY_AVATAR_CACHE_PREFIX}${cacheKey}`);
+      return null;
+    }
+    return {
+      src: entry.src,
+      expiresAt: entry.expiresAt,
+      fetchedAt: typeof entry.fetchedAt === "number" ? entry.fetchedAt : 0,
+    };
+  } catch (error) {
+    console.debug("[avatar] failed to read Ely disk cache", error);
+    return null;
+  }
+}
+
+export function clearLauncherAvatarCache(): void {
+  memoryCache.clear();
+  if (typeof window === "undefined") return;
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key?.startsWith(ELY_AVATAR_CACHE_PREFIX)) {
+        keysToRemove.push(key);
+      }
+    }
+    for (const key of keysToRemove) {
+      window.localStorage.removeItem(key);
+    }
+  } catch (error) {
+    console.debug("[avatar] failed to clear Ely disk cache", error);
+  }
+}
+
+function putCache(cacheKey: string, src: string): void {
+  const now = Date.now();
+  const entry: AvatarCacheEntry = { src, expiresAt: now + AVATAR_CACHE_TTL_MS, fetchedAt: now };
+  memoryCache.set(cacheKey, entry);
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(`${ELY_AVATAR_CACHE_PREFIX}${cacheKey}`, JSON.stringify(entry));
+  } catch (error) {
+    console.debug("[avatar] failed to persist Ely disk cache", error);
+  }
+}
+
+function getCachedAvatarEntry(cacheKey: string): AvatarCacheEntry | null {
+  const inMemory = memoryCache.get(cacheKey);
+  if (inMemory && inMemory.expiresAt > Date.now()) return inMemory;
+  if (inMemory) memoryCache.delete(cacheKey);
+
+  const diskEntry = getDiskCache(cacheKey);
+  if (!diskEntry) return null;
+  memoryCache.set(cacheKey, diskEntry);
+  return diskEntry;
+}
+
+function getCachedAvatarSrc(cacheKey: string): string | null {
+  return getCachedAvatarEntry(cacheKey)?.src ?? null;
+}
+
+export function peekElyAvatar(username: string): string | null {
+  return getCachedAvatarSrc(normalizeCacheKey(username));
+}
+
+function createNearestNeighborCanvas(size: number): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Failed to create 2D context");
+  }
+  ctx.imageSmoothingEnabled = false;
+  return canvas;
+}
+
+async function loadImageBitmap(url: string): Promise<ImageBitmap> {
+  const response = await fetch(url, { cache: "no-cache" });
+  if (!response.ok) {
+    throw new Error(`Skin request failed: ${response.status}`);
+  }
+  const blob = await response.blob();
+  return await createImageBitmap(blob);
+}
+export function buildElySkinUrl(username: string): string {
+  return `https://skinsystem.ely.by/skins/${encodeURIComponent(username)}.png`;
+}
+
+export const STEVE_SKIN_URL = "/launcher-assets/steve.png";
+
+export const DEFAULT_SKIN_URL = STEVE_SKIN_URL;
+
+export function isOfflineProfile(profile: ProfileAvatarInput): boolean {
+  return (
+    !profile.ely_username?.trim() &&
+    !profile.mc_uuid?.trim() &&
+    !profile.ely_uuid?.trim()
+  );
+}
+
+function resolveSkinUsername(profile: ProfileAvatarInput): string | null {
+  return profile.ely_username?.trim() || null;
+}
+
+async function fetchSkinBlobUrl(url: string): Promise<string> {
+  const response = await fetch(url, { cache: "no-cache" });
+  if (!response.ok) {
+    throw new Error(`Skin request failed: ${response.status}`);
+  }
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+async function fetchMcSkinViaBackend(uuid: string): Promise<string | null> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const dataUrl = await invoke<string | null>("get_mc_skin", { uuid });
+    return dataUrl ?? null;
+  } catch (error) {
+    console.debug("[skin] Rust Mojang skin command unavailable", error);
+    return null;
+  }
+}
+export async function applyMcSkinByUsername(username: string): Promise<string> {
+  const trimmed = username.trim();
+  if (!trimmed) {
+    throw new Error("Username is empty");
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const dataUrl = await invoke<string | null>("apply_mc_skin_by_username", {
+    username: trimmed,
+  });
+  if (!dataUrl) {
+    throw new Error("Player not found");
+  }
+  return dataUrl;
+}
+
+async function fetchMcAvatarViaBackend(uuid: string): Promise<string | null> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const dataUrl = await invoke<string | null>("get_mc_avatar", { uuid });
+    return dataUrl ?? null;
+  } catch (error) {
+    console.debug("[avatar] Rust Mojang avatar command unavailable", error);
+    return null;
+  }
+}
+
+export async function loadViewerSkinSource(
+  profile: ProfileAvatarInput,
+  _username: string = "",
+): Promise<string> {
+  if (isOfflineProfile(profile)) {
+    return STEVE_SKIN_URL;
+  }
+
+  const elyUsername = resolveSkinUsername(profile);
+  if (elyUsername) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const dataUrl = await invoke<string | null>("get_ely_skin", {
+        username: elyUsername,
+      });
+      if (dataUrl) return dataUrl;
+    } catch (error) {
+      console.debug("[skin] Rust Ely skin command unavailable", error);
+    }
+  }
+
+  const mcUuid = profile.mc_uuid?.trim();
+  if (mcUuid) {
+    const dataUrl = await fetchMcSkinViaBackend(mcUuid);
+    if (dataUrl) return dataUrl;
+    try {
+      const uuid = mcUuid.replace(/-/g, "");
+      return await fetchSkinBlobUrl(`https://vzge.me/full/512/${uuid}.png`);
+    } catch (error) {
+      console.debug("[skin] vzge.me fallback failed", error);
+    }
+  }
+
+  if (elyUsername) {
+    return fetchSkinBlobUrl(buildElySkinUrl(elyUsername));
+  }
+
+  return STEVE_SKIN_URL;
+}
+export async function getElyAvatarByUsername(
+  username: string,
+  fallbackSrc: string,
+  size: number = 64,
+): Promise<string> {
+  const normalizedUsername = username.trim();
+  if (!normalizedUsername) return fallbackSrc;
+
+  const cacheKey = normalizeCacheKey(normalizedUsername);
+  const cached = getCachedAvatarEntry(cacheKey);
+  if (
+    cached &&
+    cached.fetchedAt >= elyAvatarsStaleBefore &&
+    Date.now() - cached.fetchedAt < ELY_AVATAR_FRESH_MS
+  ) {
+    return cached.src;
+  }
+
+  let request = elyAvatarRequests.get(cacheKey);
+  if (!request) {
+    request = fetchElyAvatar(normalizedUsername, cacheKey, size).finally(() => {
+      elyAvatarRequests.delete(cacheKey);
+    });
+    elyAvatarRequests.set(cacheKey, request);
+  }
+  return (await request) ?? cached?.src ?? fallbackSrc;
+}
+
+async function fetchElyAvatar(
+  username: string,
+  cacheKey: string,
+  size: number,
+): Promise<string | null> {
+  try {
+    let avatarSrc: string | null = null;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      avatarSrc = await invoke<ElyAvatarCommandResponse>("get_ely_avatar", { username });
+    } catch (error) {
+      console.debug("[avatar] Rust Ely avatar command unavailable, using frontend crop", error);
+    }
+
+    if (!avatarSrc) {
+      avatarSrc = await buildAvatarFromSkin(buildElySkinUrl(username), size);
+    }
+    if (avatarSrc) putCache(cacheKey, avatarSrc);
+    return avatarSrc;
+  } catch (error) {
+    console.debug("[avatar] Ely skin avatar failed, falling back", error);
+    return null;
+  }
+}
+
+export async function buildAvatarFromSkin(
+  skinUrl: string,
+  size: number = 64,
+): Promise<string> {
+  const bitmap = await loadImageBitmap(skinUrl);
+  try {
+    if (bitmap.width < 64 || bitmap.height < 16) {
+      throw new Error(`Unexpected skin size ${bitmap.width}x${bitmap.height}`);
+    }
+
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = 8;
+    sourceCanvas.height = 8;
+    const sourceCtx = sourceCanvas.getContext("2d");
+    if (!sourceCtx) {
+      throw new Error("Failed to create source canvas context");
+    }
+    sourceCtx.imageSmoothingEnabled = false;
+
+    sourceCtx.clearRect(0, 0, 8, 8);
+    sourceCtx.drawImage(bitmap, 8, 8, 8, 8, 0, 0, 8, 8);
+    sourceCtx.drawImage(bitmap, 40, 8, 8, 8, 0, 0, 8, 8);
+
+    const outCanvas = createNearestNeighborCanvas(size);
+    const outCtx = outCanvas.getContext("2d");
+    if (!outCtx) {
+      throw new Error("Failed to create output canvas context");
+    }
+    outCtx.drawImage(sourceCanvas, 0, 0, 8, 8, 0, 0, size, size);
+    return outCanvas.toDataURL("image/png");
+  } finally {
+    bitmap.close();
+  }
+}
+
+export async function getAvatarSrc(
+  profile: ProfileAvatarInput,
+  fallbackSrc: string,
+  size: number = 64,
+): Promise<string> {
+  if (isOfflineProfile(profile)) {
+    try {
+      return await buildAvatarFromSkin(STEVE_SKIN_URL, size);
+    } catch {
+      return fallbackSrc;
+    }
+  }
+
+  const elyUsername = profile.ely_username?.trim();
+  if (elyUsername) {
+    const src = await getElyAvatarByUsername(elyUsername, fallbackSrc, size);
+    if (src !== fallbackSrc) return src;
+  }
+
+  const mcUuid = profile.mc_uuid?.trim();
+  if (mcUuid) {
+    const cacheKey = `mc:${normalizeCacheKey(mcUuid)}`;
+    const cached = getCachedAvatarSrc(cacheKey);
+    if (cached) return cached;
+    const avatarSrc = await fetchMcAvatarViaBackend(mcUuid);
+    if (avatarSrc) {
+      putCache(cacheKey, avatarSrc);
+      return avatarSrc;
+    }
+  }
+
+  return fallbackSrc;
+}
+
+export async function getUserListAvatarSrc(
+  input: {
+    nickname: string;
+    ely_username?: string | null;
+    mc_uuid?: string | null;
+  },
+  size: number = 64,
+): Promise<string> {
+  const nickname = input.nickname.trim() || "?";
+  const fallback = buildInitialAvatarDataUrl(nickname);
+  const elyUsername = input.ely_username?.trim() || null;
+  const mcUuid = input.mc_uuid?.trim() || null;
+  if (!elyUsername && !mcUuid) return fallback;
+  return getAvatarSrc(
+    {
+      nickname,
+      ely_username: elyUsername,
+      ely_uuid: null,
+      mc_uuid: mcUuid,
+    },
+    fallback,
+    size,
+  );
+}
+
+export function userListAvatarCacheKey(input: {
+  ely_username?: string | null;
+  mc_uuid?: string | null;
+  nickname: string;
+}): string {
+  const ely = input.ely_username?.trim().toLowerCase();
+  if (ely) return `ely:${ely}`;
+  const mc = input.mc_uuid?.trim().toLowerCase().replace(/-/g, "");
+  if (mc) return `mc:${mc}`;
+  return `nick:${input.nickname.trim().toLowerCase() || "?"}`;
+}

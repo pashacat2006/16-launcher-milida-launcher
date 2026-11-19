@@ -1,0 +1,517 @@
+use rand::distributions::Alphanumeric;
+use rand::Rng;
+use tauri::command;
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
+
+#[cfg(not(windows))]
+use crate::app::paths::launcher_secrets_path;
+use crate::app::paths::{launcher_accounts_path, profile_path};
+use crate::infra::fs_atomic::{backup_path_for, read_to_string_with_backup, write_atomic};
+#[cfg(not(windows))]
+use crate::infra::secrets;
+use crate::models::launcher_account::{
+    AccountSecrets, LauncherAccountEntry, LauncherAccountSummary, LauncherAccountsStore, Profile,
+};
+use crate::services::game::nickname::sanitize_nickname;
+
+static ACCOUNTS_LOCK: Mutex<()> = Mutex::new(());
+
+fn accounts_lock() -> MutexGuard<'static, ()> {
+    ACCOUNTS_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn new_launcher_account_id() -> String {
+    format!(
+        "la_{}",
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(16)
+            .map(char::from)
+            .collect::<String>()
+    )
+}
+
+type SecretsMap = BTreeMap<String, AccountSecrets>;
+
+#[cfg(windows)]
+fn read_secrets_map() -> SecretsMap {
+    SecretsMap::new()
+}
+
+#[cfg(windows)]
+fn store_secrets_in_vault(_store: &LauncherAccountsStore) -> bool {
+    for path in [
+        crate::app::paths::launcher_secrets_path(),
+        crate::app::paths::launcher_secrets_key_path(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    false
+}
+
+#[cfg(not(windows))]
+fn store_secrets_in_vault(store: &LauncherAccountsStore) -> bool {
+    match sync_secrets_vault(store) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("[Secrets] Токены останутся в accounts.json: {e}");
+            false
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn read_secrets_map() -> SecretsMap {
+    let Ok(path) = launcher_secrets_path() else {
+        return SecretsMap::new();
+    };
+    match secrets::read_vault(&path) {
+        Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            eprintln!("[Secrets] Ошибка разбора хранилища: {e}");
+            SecretsMap::new()
+        }),
+        Ok(None) => SecretsMap::new(),
+        Err(e) => {
+            eprintln!("[Secrets] {e}");
+            SecretsMap::new()
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn sync_secrets_vault(store: &LauncherAccountsStore) -> Result<(), String> {
+    let map: SecretsMap = store
+        .accounts
+        .iter()
+        .filter_map(|a| {
+            let s = a.profile.secrets();
+            (!s.is_empty()).then(|| (a.id.clone(), s))
+        })
+        .collect();
+    let path = launcher_secrets_path()?;
+    if map.is_empty() && !path.exists() {
+        return Ok(());
+    }
+    let bytes =
+        serde_json::to_vec(&map).map_err(|e| format!("Ошибка сериализации хранилища: {e}"))?;
+    secrets::write_vault(&path, &bytes)
+}
+
+fn raw_active_account_id() -> Option<String> {
+    let text = read_to_string_with_backup(&launcher_accounts_path().ok()?)?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("active_id")?.as_str().map(str::to_string)
+}
+
+fn active_account_profile(store: &LauncherAccountsStore) -> Option<Profile> {
+    let aid = store.active_id.as_deref()?;
+    store
+        .accounts
+        .iter()
+        .find(|a| a.id == aid)
+        .map(|a| a.profile.clone())
+}
+
+pub fn read_profile_from_disk() -> Result<Profile, String> {
+    let path = profile_path()?;
+    let Some(s) = read_to_string_with_backup(&path) else {
+        return Ok(Profile::default());
+    };
+    let mut profile: Profile =
+        serde_json::from_str(&s).map_err(|e| format!("Ошибка разбора профиля: {e}"))?;
+    if let Some(id) = raw_active_account_id() {
+        if let Some(sec) = read_secrets_map().get(&id) {
+            profile.fill_missing_secrets(sec);
+        }
+    }
+    Ok(profile)
+}
+
+fn save_accounts_store(store: &LauncherAccountsStore) -> Result<bool, String> {
+    let path = launcher_accounts_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Не удалось создать папку: {e}"))?;
+    }
+    let in_vault = store_secrets_in_vault(store);
+    let s = if in_vault {
+        let on_disk = LauncherAccountsStore {
+            active_id: store.active_id.clone(),
+            accounts: store
+                .accounts
+                .iter()
+                .map(|a| LauncherAccountEntry {
+                    id: a.id.clone(),
+                    profile: a.profile.without_secrets(),
+                })
+                .collect(),
+        };
+        serde_json::to_string_pretty(&on_disk)
+    } else {
+        serde_json::to_string_pretty(store)
+    }
+    .map_err(|e| format!("Ошибка сериализации accounts.json: {e}"))?;
+    write_atomic(&path, s).map_err(|e| format!("Не удалось сохранить accounts.json: {e}"))?;
+    Ok(in_vault)
+}
+
+fn read_accounts_file(path: &Path) -> Result<Option<LauncherAccountsStore>, String> {
+    let main_error = match std::fs::read_to_string(path) {
+        Ok(text) if text.trim().is_empty() => None,
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(store) => return Ok(Some(store)),
+            Err(e) => Some(format!("Ошибка разбора accounts.json: {e}")),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("Ошибка чтения accounts.json: {e}")),
+    };
+    if let Ok(text) = std::fs::read_to_string(backup_path_for(path)) {
+        if let Ok(store) = serde_json::from_str(&text) {
+            eprintln!("[Accounts] accounts.json повреждён, восстановлено из резервной копии");
+            return Ok(Some(store));
+        }
+    }
+    main_error.map_or(Ok(None), Err)
+}
+
+fn load_accounts_store() -> Result<LauncherAccountsStore, String> {
+    let path = launcher_accounts_path()?;
+    if let Some(mut store) = read_accounts_file(&path)? {
+        let legacy_plaintext = store.accounts.iter().any(|a| !a.profile.secrets().is_empty());
+        let vault = read_secrets_map();
+        for a in &mut store.accounts {
+            if let Some(sec) = vault.get(&a.id) {
+                a.profile.fill_missing_secrets(sec);
+            }
+        }
+        if legacy_plaintext && cfg!(not(windows)) {
+            match save_accounts_store(&store) {
+                Ok(true) => {
+                    if let Some(p) = active_account_profile(&store) {
+                        let _ = persist_profile_json(&p, true);
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => eprintln!("[Secrets] Не удалось перенести токены: {e}"),
+            }
+        }
+        return Ok(store);
+    }
+
+    let profile = read_profile_from_disk()?;
+    let id = new_launcher_account_id();
+    let store = LauncherAccountsStore {
+        active_id: Some(id.clone()),
+        accounts: vec![LauncherAccountEntry { id, profile }],
+    };
+    let in_vault = save_accounts_store(&store)?;
+    if in_vault {
+        if let Some(p) = active_account_profile(&store) {
+            let _ = persist_profile_json(&p, true);
+        }
+    }
+    Ok(store)
+}
+
+fn normalize_account_uuid(s: &str) -> String {
+    s.trim().to_lowercase().replace('-', "")
+}
+
+fn find_account_by_online_identity(store: &LauncherAccountsStore, profile: &Profile) -> Option<usize> {
+    if let Some(u) = profile.mc_uuid.as_ref() {
+        if !u.trim().is_empty() {
+            let n = normalize_account_uuid(u);
+            return store.accounts.iter().position(|a| {
+                a.profile
+                    .mc_uuid
+                    .as_ref()
+                    .map(|x| normalize_account_uuid(x))
+                    == Some(n.clone())
+            });
+        }
+    }
+    if let Some(u) = profile.ely_uuid.as_ref() {
+        if !u.trim().is_empty() {
+            let n = normalize_account_uuid(u);
+            return store.accounts.iter().position(|a| {
+                a.profile
+                    .ely_uuid
+                    .as_ref()
+                    .map(|x| normalize_account_uuid(x))
+                    == Some(n.clone())
+            });
+        }
+    }
+    None
+}
+
+fn launcher_account_label(p: &Profile) -> String {
+    if let Some(u) = p.mc_username.as_ref() {
+        let t = u.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    if let Some(u) = p.ely_username.as_ref() {
+        let t = u.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    let n = p.nickname.trim();
+    if !n.is_empty() {
+        return n.to_string();
+    }
+    "—".to_string()
+}
+
+fn launcher_account_kind(p: &Profile) -> &'static str {
+    let has_mc = p.mc_uuid.as_ref().is_some_and(|s| !s.trim().is_empty());
+    let has_ms = p.ms_access_token.is_some() || p.ms_id_token.is_some();
+    if has_mc && has_ms {
+        return "microsoft";
+    }
+    if p.ely_uuid.as_ref().is_some_and(|s| !s.trim().is_empty()) {
+        return "ely";
+    }
+    "offline"
+}
+
+fn upsert_launcher_accounts_store(profile: &Profile) -> Result<bool, String> {
+    let mut store = load_accounts_store()?;
+    if let Some(idx) = find_account_by_online_identity(&store, profile) {
+        store.accounts[idx].profile = profile.clone();
+        store.active_id = Some(store.accounts[idx].id.clone());
+    } else {
+        let has_online_identity = profile.mc_uuid.as_ref().is_some_and(|s| !s.trim().is_empty())
+            || profile.ely_uuid.as_ref().is_some_and(|s| !s.trim().is_empty());
+        if has_online_identity {
+            let id = new_launcher_account_id();
+            store.accounts.push(LauncherAccountEntry {
+                id: id.clone(),
+                profile: profile.clone(),
+            });
+            store.active_id = Some(id);
+        } else if let Some(ref aid) = store.active_id {
+            if let Some(idx) = store.accounts.iter().position(|a| &a.id == aid) {
+                store.accounts[idx].profile = profile.clone();
+            } else {
+                let id = new_launcher_account_id();
+                store.accounts.push(LauncherAccountEntry {
+                    id: id.clone(),
+                    profile: profile.clone(),
+                });
+                store.active_id = Some(id);
+            }
+        } else {
+            let id = new_launcher_account_id();
+            store.accounts.push(LauncherAccountEntry {
+                id: id.clone(),
+                profile: profile.clone(),
+            });
+            store.active_id = Some(id);
+        }
+    }
+    save_accounts_store(&store)
+}
+
+fn persist_profile_json(profile: &Profile, strip_secrets: bool) -> Result<(), String> {
+    let path = profile_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Не удалось создать папку: {e}"))?;
+    }
+    let s = if strip_secrets {
+        serde_json::to_string_pretty(&profile.without_secrets())
+    } else {
+        serde_json::to_string_pretty(profile)
+    }
+    .map_err(|e| format!("Ошибка сериализации: {e}"))?;
+    write_atomic(&path, s).map_err(|e| format!("Не удалось сохранить профиль: {e}"))?;
+    Ok(())
+}
+
+fn save_full_profile_unlocked(profile: &Profile) -> Result<(), String> {
+    let in_vault = upsert_launcher_accounts_store(profile)?;
+    persist_profile_json(profile, in_vault)
+}
+
+pub fn save_full_profile(profile: &Profile) -> Result<(), String> {
+    let _guard = accounts_lock();
+    save_full_profile_unlocked(profile)
+}
+
+fn get_profile_unlocked() -> Result<Profile, String> {
+    let path = launcher_accounts_path()?;
+    if matches!(read_accounts_file(&path), Ok(None)) {
+        let _ = load_accounts_store()?;
+    }
+    read_profile_from_disk()
+}
+
+#[command]
+pub fn get_profile() -> Result<Profile, String> {
+    let _guard = accounts_lock();
+    get_profile_unlocked()
+}
+
+#[command]
+pub fn set_profile(nickname: String) -> Result<String, String> {
+    let _guard = accounts_lock();
+    let mut profile = get_profile_unlocked()?;
+    profile.nickname = sanitize_nickname(&nickname);
+    save_full_profile_unlocked(&profile)?;
+    Ok(profile.nickname)
+}
+
+#[command]
+pub fn list_launcher_accounts() -> Result<Vec<LauncherAccountSummary>, String> {
+    let _guard = accounts_lock();
+    let store = load_accounts_store()?;
+    let active = store.active_id.as_deref();
+    let mut out: Vec<LauncherAccountSummary> = store
+        .accounts
+        .iter()
+        .map(|a| LauncherAccountSummary {
+            id: a.id.clone(),
+            label: launcher_account_label(&a.profile),
+            kind: launcher_account_kind(&a.profile).to_string(),
+            is_active: active == Some(a.id.as_str()),
+        })
+        .collect();
+    out.sort_by(|x, y| {
+        let ak = match x.kind.as_str() {
+            "microsoft" => 0,
+            "ely" => 1,
+            _ => 2,
+        };
+        let bk = match y.kind.as_str() {
+            "microsoft" => 0,
+            "ely" => 1,
+            _ => 2,
+        };
+        ak.cmp(&bk).then(x.label.to_lowercase().cmp(&y.label.to_lowercase()))
+    });
+    Ok(out)
+}
+
+fn switch_launcher_account_unlocked(account_id: String) -> Result<(), String> {
+    let mut store = load_accounts_store()?;
+    let p = store
+        .accounts
+        .iter()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| "Аккаунт не найден.".to_string())?
+        .profile
+        .clone();
+    store.active_id = Some(account_id);
+    let in_vault = save_accounts_store(&store)?;
+    persist_profile_json(&p, in_vault)?;
+    Ok(())
+}
+
+#[command]
+pub fn switch_launcher_account(account_id: String) -> Result<(), String> {
+    let _guard = accounts_lock();
+    switch_launcher_account_unlocked(account_id)
+}
+
+pub fn activate_instance_account(account_id: &str) -> Result<bool, String> {
+    let _guard = accounts_lock();
+    let store = load_accounts_store()?;
+    if store.active_id.as_deref() == Some(account_id) {
+        return Ok(true);
+    }
+    if !store.accounts.iter().any(|a| a.id == account_id) {
+        return Ok(false);
+    }
+    switch_launcher_account_unlocked(account_id.to_string())?;
+    Ok(true)
+}
+
+#[command]
+pub fn remove_launcher_account(account_id: String) -> Result<(), String> {
+    let _guard = accounts_lock();
+    let mut store = load_accounts_store()?;
+    let before = store.accounts.len();
+    store.accounts.retain(|a| a.id != account_id);
+    if store.accounts.len() == before {
+        return Err("Аккаунт не найден.".to_string());
+    }
+    let was_active = store.active_id.as_deref() == Some(account_id.as_str());
+    if was_active {
+        store.active_id = store.accounts.first().map(|a| a.id.clone());
+    }
+    let in_vault = save_accounts_store(&store)?;
+    if was_active {
+        let p = active_account_profile(&store).unwrap_or_default();
+        persist_profile_json(&p, in_vault)?;
+    }
+    Ok(())
+}
+
+#[command]
+pub fn add_launcher_account(nickname: Option<String>) -> Result<(), String> {
+    let _guard = accounts_lock();
+    let mut store = load_accounts_store()?;
+    let idx = store.accounts.len() + 1;
+    let nick = nickname
+        .map(|s| sanitize_nickname(&s))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("Player{}", idx));
+    let id = new_launcher_account_id();
+    let profile = Profile {
+        nickname: nick,
+        ..Default::default()
+    };
+    store.accounts.push(LauncherAccountEntry {
+        id: id.clone(),
+        profile: profile.clone(),
+    });
+    store.active_id = Some(id);
+    let in_vault = save_accounts_store(&store)?;
+    persist_profile_json(&profile, in_vault)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_file(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("accounts_test_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("accounts.json")
+    }
+
+    const STORE: &str = r#"{"active_id":"a","accounts":[]}"#;
+
+    #[test]
+    fn empty_file_falls_back_to_backup() {
+        let path = scratch_file("backup");
+        std::fs::write(&path, "").unwrap();
+        std::fs::write(backup_path_for(&path), STORE).unwrap();
+        let store = read_accounts_file(&path).unwrap().unwrap();
+        assert_eq!(store.active_id.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn empty_file_without_backup_counts_as_missing() {
+        let path = scratch_file("empty");
+        std::fs::write(&path, "").unwrap();
+        assert!(read_accounts_file(&path).unwrap().is_none());
+        assert!(read_accounts_file(&path.with_file_name("none.json")).unwrap().is_none());
+    }
+
+    #[test]
+    fn corrupt_file_without_backup_stays_an_error() {
+        let path = scratch_file("corrupt");
+        std::fs::write(&path, "{oops").unwrap();
+        assert!(read_accounts_file(&path).is_err());
+    }
+}

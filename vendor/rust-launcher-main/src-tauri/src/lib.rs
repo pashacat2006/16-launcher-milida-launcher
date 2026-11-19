@@ -1,0 +1,461 @@
+use tauri::Manager;
+
+pub mod app;
+pub mod bridge;
+mod commands;
+mod infra;
+mod java_runtime;
+mod mrpack_open;
+mod profile_launch;
+pub mod models;
+pub mod services;
+
+use services::background::{get_background_data_uri, set_background_image};
+use services::game::{
+    add_dropped_profile_files, add_launcher_account, add_profile_files, cancel_download, check_version_files_integrity,
+    clear_launcher_cache, create_build_preset_from_profile, create_profile, delete_build_preset,
+    delete_item, purge_deleted_item, restore_deleted_item, delete_profile, detect_java_runtimes, get_build_preset_icon_data_uri,
+    list_build_presets, list_installed_java_runtimes, reinstall_java_runtimes, save_build_preset,
+    add_lazy_mod_items, apply_lazy_mod_sets, delete_lazy_mod_set, list_lazy_mod_sets,
+    remove_lazy_mod_item, save_lazy_mod_set,
+    download_modrinth_file, download_modrinth_modpack_and_import, export_launcher_settings_backup,
+    default_external_launcher_path, list_importable_instances, import_selected_external_instance,
+    fetch_all_versions, fetch_fabric_loaders, fetch_forge_builds_for_game, fetch_forge_versions,
+    fetch_neoforge_builds_for_game, fetch_neoforge_versions, fetch_quilt_loaders,
+    delete_minecraft_installation, fetch_versions_for_loader,
+    get_effective_settings, get_version_install_details,
+    get_installed_fabric_profile_id, get_installed_quilt_profile_id, get_java_settings, get_profile,
+    get_profile_icon_data_uri, get_profile_java_settings, get_profile_play_time_seconds, get_profiles,
+    set_profile_icon_from_file, list_profile_texture_icons, set_profile_icon_from_texture,
+    get_selected_profile,
+    get_game_process_stats, get_graphics_adapters, get_running_game_session, get_settings, get_system_memory_gb, get_launcher_cache_size, import_custom_version,
+    import_launcher_settings_backup, import_mrpack_as_new_profile, import_zip_as_new_profile,
+    install_fabric, install_forge, install_local_version, install_neoforge, install_quilt, install_version,
+        launch_game, list_installed_fabric_game_versions, list_installed_quilt_game_versions,
+    list_installed_versions, list_launcher_accounts, list_profile_items,     open_game_folder,
+    delete_screenshot, get_screenshot_data_uri, get_screenshot_thumbnail,
+    list_screenshots, open_screenshot, open_screenshots_folder, read_instance_analysis_logs,
+    remove_launcher_account,
+    change_profile_version, rename_profile, reorder_profile_resource_packs,
+    reset_download_cancel,
+    reset_settings_to_default, set_java_settings, set_profile, set_profile_item_enabled,
+    set_profile_java_settings, set_selected_profile, set_settings, stop_game, switch_launcher_account,
+    update_profile_settings, get_profile_account_id,
+    get_profile_launch_hooks, set_profile_launch_hooks, run_launch_preflight, set_profile_item_pinned,
+    validate_java_args, verify_java_runtimes,
+    lan_bridge_attach, lan_bridge_detach, lan_bridge_detect_port, lan_bridge_game_port, lan_bridge_query_world,
+    lan_bridge_set_flow, lan_bridge_set_host_port, lan_bridge_start_guest, lan_bridge_stop,
+    lan_bridge_write,
+    create_profile_backup, delete_profile_backup, list_profile_backups,
+    get_profile_backup_settings, set_profile_backup_settings,
+    open_profile_backups_folder, restore_profile_backup_as_new,
+    list_content_snapshots, restore_content_snapshot,
+    cleanup_profile, delete_profile_worlds, duplicate_profile, get_profile_disk_usage,
+    list_profile_worlds, get_profile_continue_target,
+    build_game_run_report, delete_game_run, list_game_runs, read_game_run_log, search_game_runs,
+    export_server_pack, get_server_pack, list_server_pack_mods, save_server_pack_config,
+    create_world_backup, delete_world_backup, list_world_backups, open_world_backups_folder, restore_world_backup, delete_world_chunks, get_world_overview, get_world_region, list_world_dimensions,
+    list_config_files, read_config_file, save_config_file, list_config_versions, read_config_version, search_config_files, validate_config_toml,
+};
+use services::auth::{
+    ely_login_with_password, ely_logout, ms_logout,     start_ely_oauth, start_ms_oauth,
+};
+use services::curseforge::{
+    curseforge_get_mod, curseforge_get_mod_files, curseforge_list_categories,
+    curseforge_list_minecraft_versions, curseforge_search_mods, download_curseforge_file,
+    download_curseforge_modpack_and_import,     };
+use services::modrinth::{
+    apply_profile_content_updates, check_profile_content_updates,
+    check_profile_incompatible_content, download_modrinth_with_dependencies,
+    install_missing_mod_dependency, list_installed_content_index, preview_profile_version_change,
+    resolve_profile_item_metadata, scan_profile_mod_jars,
+};
+use services::room_sync::{
+    room_sync_apply, room_sync_discard, room_sync_fetch_platform, room_sync_inspect,
+    room_sync_manifest, room_sync_plan, room_sync_read_file, room_sync_stage_chunk,
+    room_sync_stage_finish,
+};
+use services::rpc::{
+    discord_presence_clear, discord_presence_update, shutdown as discord_presence_shutdown,
+};
+use commands::{
+    export_build, get_ely_avatar, get_ely_skin, get_mc_avatar,
+    apply_mc_skin_by_username, get_mc_skin, get_mc_texture_data_url,
+    list_build_files, list_mc_capes, list_mc_skins, preview_export,
+    set_mc_active_cape, set_mc_active_skin, upload_mc_skin,
+};
+use infra::notify::os_notify;
+use mrpack_open::take_pending_mrpack_open;
+use profile_launch::{
+    extract_profile_launch_from_os_args, pending_profile_launch_new, stash_argv_profile_launch_if_any,
+    emit_profile_launch_request,
+    take_pending_profile_launch,
+};
+use services::shortcuts::{create_profile_desktop_shortcut, update_jump_list};
+use services::themes::{
+    add_theme_asset, create_empty_theme, delete_theme, duplicate_theme, export_theme_zip,
+    get_theme, import_theme_zip, list_themes, open_theme_css_file,
+    open_theme_folder, open_themes_folder, save_theme, watch_theme,
+};
+
+#[cfg(target_os = "linux")]
+pub fn linux_startup_init() {
+    infra::platform::configure_linux_startup();
+}
+
+#[cfg(not(feature = "millida-bridge"))]
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    app::env::load_dotenv_files();
+
+    #[cfg(target_os = "windows")]
+    infra::platform::configure_windows_webview_memory();
+
+    let pending_mrpack = mrpack_open::pending_mrpack_new();
+    let pending_profile_launch = pending_profile_launch_new();
+
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_http::init())
+        .manage(pending_mrpack.clone())
+        .manage(pending_profile_launch.clone());
+
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        builder = builder
+            .plugin(
+                tauri_plugin_autostart::Builder::new()
+                    .app_name("16Launcher")
+                    .build(),
+            )
+            .plugin(
+                tauri_plugin_single_instance::Builder::new()
+                    .dbus_id("com.steyy.mc16launcher")
+                    .callback(|app, args, _cwd| {
+                        if let Some(p) = mrpack_open::extract_mrpack_from_os_args(&args) {
+                            mrpack_open::emit_mrpack_open_request(
+                                &app,
+                                p.to_string_lossy().to_string(),
+                            );
+                        }
+                        if let Some(profile_id) = extract_profile_launch_from_os_args(&args) {
+                            emit_profile_launch_request(&app, profile_id);
+                        }
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                            infra::window_idle::sync(app);
+                        }
+                    })
+                    .build(),
+            );
+    }
+
+    builder
+        .setup({
+            let pending_mrpack = pending_mrpack.clone();
+            let pending_launch = pending_profile_launch.clone();
+            move |app| {
+                mrpack_open::stash_argv_mrpack_if_any(&pending_mrpack);
+                stash_argv_profile_launch_if_any(&pending_launch);
+                if let Err(e) = app::paths::ensure_game_data_layout() {
+                    eprintln!("[16Launcher] game data migration: {e}");
+                }
+                infra::window_icon::apply_launcher_icon_to_main_window(app);
+                if let Err(e) = infra::tray::setup_tray(app) {
+                    eprintln!("[16Launcher] tray setup failed: {e}");
+                }
+                let settings = services::game::settings::load_settings_from_disk();
+                infra::autostart::sync_autostart_from_settings(app.handle(), settings.autostart_enabled);
+                services::themes::ensure_example_theme(app.handle());
+                Ok(())
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            discord_presence_update,
+            discord_presence_clear,
+            os_notify,
+            fetch_all_versions,
+            fetch_versions_for_loader,
+            check_version_files_integrity,
+                        fetch_fabric_loaders,
+            fetch_quilt_loaders,
+            import_custom_version,
+            fetch_forge_versions,
+            fetch_forge_builds_for_game,
+            fetch_neoforge_versions,
+            fetch_neoforge_builds_for_game,
+            install_version,
+            install_local_version,
+            install_fabric,
+            install_quilt,
+            install_forge,
+            install_neoforge,
+                        launch_game,
+            lan_bridge_attach,
+            lan_bridge_detach,
+            lan_bridge_start_guest,
+            lan_bridge_set_host_port,
+            lan_bridge_set_flow,
+            lan_bridge_game_port,
+            lan_bridge_detect_port,
+            lan_bridge_query_world,
+            lan_bridge_write,
+            lan_bridge_stop,
+                        list_installed_versions,
+            get_installed_fabric_profile_id,
+            get_installed_quilt_profile_id,
+            list_installed_fabric_game_versions,
+            list_installed_quilt_game_versions,
+            get_version_install_details,
+            delete_minecraft_installation,
+            open_game_folder,
+                        get_profile,
+            get_profiles,
+            get_profile_icon_data_uri,
+            set_profile_icon_from_file,
+            list_profile_texture_icons,
+            set_profile_icon_from_texture,
+            get_profile_play_time_seconds,
+            create_profile,
+            list_build_presets,
+            save_build_preset,
+            delete_build_preset,
+            create_build_preset_from_profile,
+            get_build_preset_icon_data_uri,
+            list_lazy_mod_sets,
+            save_lazy_mod_set,
+            delete_lazy_mod_set,
+            add_lazy_mod_items,
+            remove_lazy_mod_item,
+            apply_lazy_mod_sets,
+            set_profile,
+            get_selected_profile,
+            set_selected_profile,
+            get_settings,
+            set_settings,
+            get_effective_settings,
+                                    stop_game,
+            get_game_process_stats,
+            get_running_game_session,
+            list_game_runs,
+            read_game_run_log,
+            delete_game_run,
+            search_game_runs,
+            build_game_run_report,
+            get_server_pack,
+            save_server_pack_config,
+            list_server_pack_mods,
+            export_server_pack,
+            create_world_backup,
+            delete_world_backup,
+            list_world_backups,
+            open_world_backups_folder,
+            restore_world_backup,
+            delete_world_chunks,
+            get_world_overview,
+            get_world_region,
+            list_world_dimensions,
+            list_config_files,
+            read_config_file,
+            save_config_file,
+            list_config_versions,
+            read_config_version,
+            search_config_files,
+            validate_config_toml,
+            get_system_memory_gb,
+            get_graphics_adapters,
+            start_ely_oauth,
+                        ely_login_with_password,
+            ely_logout,
+                        start_ms_oauth,
+            ms_logout,
+            cancel_download,
+            reset_download_cancel,
+            download_modrinth_file,
+            download_modrinth_with_dependencies,
+            install_missing_mod_dependency,
+                        check_profile_content_updates,
+            check_profile_incompatible_content,
+            scan_profile_mod_jars,
+            apply_profile_content_updates,
+            resolve_profile_item_metadata,
+            list_installed_content_index,
+            download_modrinth_modpack_and_import,
+            curseforge_search_mods,
+            curseforge_get_mod,
+            curseforge_get_mod_files,
+            curseforge_list_categories,
+            curseforge_list_minecraft_versions,
+            download_curseforge_file,
+            download_curseforge_modpack_and_import,
+                                                import_mrpack_as_new_profile,
+            import_zip_as_new_profile,
+            default_external_launcher_path,
+            list_importable_instances,
+            import_selected_external_instance,
+            update_profile_settings,
+            get_profile_account_id,
+            get_profile_launch_hooks,
+            set_profile_launch_hooks,
+            run_launch_preflight,
+            room_sync_manifest,
+            room_sync_read_file,
+            room_sync_plan,
+            room_sync_fetch_platform,
+            room_sync_stage_chunk,
+            room_sync_stage_finish,
+            room_sync_inspect,
+            room_sync_apply,
+            room_sync_discard,
+            set_profile_item_pinned,
+            preview_profile_version_change,
+            delete_item,
+            restore_deleted_item,
+            purge_deleted_item,
+            list_profile_items,
+            set_profile_item_enabled,
+            reorder_profile_resource_packs,
+            rename_profile,
+            change_profile_version,
+            add_profile_files,
+            add_dropped_profile_files,
+                        delete_profile,
+            get_java_settings,
+            set_java_settings,
+            get_profile_java_settings,
+            set_profile_java_settings,
+            validate_java_args,
+            detect_java_runtimes,
+            list_installed_java_runtimes,
+            verify_java_runtimes,
+            reinstall_java_runtimes,
+            list_build_files,
+            preview_export,
+            export_build,
+            create_profile_backup,
+            list_profile_backups,
+            get_profile_backup_settings,
+            set_profile_backup_settings,
+            delete_profile_backup,
+            restore_profile_backup_as_new,
+            list_content_snapshots,
+            restore_content_snapshot,
+            open_profile_backups_folder,
+            duplicate_profile,
+            list_profile_worlds,
+            get_profile_continue_target,
+            delete_profile_worlds,
+            get_profile_disk_usage,
+            cleanup_profile,
+                        reset_settings_to_default,
+            get_launcher_cache_size,
+            clear_launcher_cache,
+            set_background_image,
+            get_background_data_uri,
+            export_launcher_settings_backup,
+            import_launcher_settings_backup,
+            list_launcher_accounts,
+            switch_launcher_account,
+            remove_launcher_account,
+            add_launcher_account,
+            get_ely_avatar,
+            get_ely_skin,
+            get_mc_avatar,
+            get_mc_skin,
+            apply_mc_skin_by_username,
+            get_mc_texture_data_url,
+            list_mc_capes,
+            list_mc_skins,
+            set_mc_active_cape,
+            set_mc_active_skin,
+            upload_mc_skin,
+            take_pending_mrpack_open,
+            take_pending_profile_launch,
+            create_profile_desktop_shortcut,
+            update_jump_list,
+            infra::tray::update_tray_profiles,
+            infra::tray::tray_menu_state,
+            infra::tray::tray_menu_fit,
+            infra::tray::tray_menu_action,
+                        list_screenshots,
+            get_screenshot_data_uri,
+            get_screenshot_thumbnail,
+            delete_screenshot,
+            open_screenshots_folder,
+            open_screenshot,
+            read_instance_analysis_logs,
+                        list_themes,
+            import_theme_zip,
+                        create_empty_theme,
+            delete_theme,
+            open_themes_folder,
+            open_theme_css_file,
+            get_theme,
+            save_theme,
+            duplicate_theme,
+            export_theme_zip,
+            add_theme_asset,
+            open_theme_folder,
+            watch_theme,
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                for url in urls {
+                    if let Ok(path) = url.to_file_path() {
+                        if mrpack_open::is_mrpack_path(&path) {
+                            if let Some(pending) = app_handle.try_state::<mrpack_open::PendingMrpackArc>()
+                            {
+                                mrpack_open::stash_mrpack_path(&pending, &path);
+                            }
+                            mrpack_open::emit_mrpack_open_request(
+                                &app_handle,
+                                path.to_string_lossy().to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+
+            match event {
+                tauri::RunEvent::WindowEvent { label, event, .. } => {
+                    if label == "main" {
+                        if matches!(
+                            event,
+                            tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_)
+                        ) {
+                            infra::window_idle::sync(app_handle);
+                        }
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            let hide_to_tray =
+                                services::game::settings::load_settings_from_disk()
+                                    .minimize_to_tray_on_close;
+                            if hide_to_tray {
+                                api.prevent_close();
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.hide();
+                                    infra::window_idle::sync(app_handle);
+                                }
+                            } else {
+                                discord_presence_shutdown();
+                                app_handle.exit(0);
+                            }
+                        }
+                    }
+                }
+                tauri::RunEvent::Exit => {
+                    let _ = services::game::profiles::finish_playtime_session();
+                    discord_presence_shutdown();
+                }
+                _ => {}
+            }
+        });
+}

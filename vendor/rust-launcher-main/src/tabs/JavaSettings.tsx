@@ -1,0 +1,985 @@
+import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { InputClearButton } from "../components/ui";
+import { useT, type Language } from "../i18n";
+import { SettingsSwitch } from "../settings-ui/SettingsComponents";
+type NotificationKind = "info" | "success" | "error" | "warning";
+
+type JavaSettings = {
+  use_custom_jvm_args: boolean;
+  java_path: string | null;
+  xms: string | null;
+  xmx: string | null;
+  jvm_args: string | null;
+  preset: string | null;
+  prefer_ipv6_network: boolean;
+};
+
+type JavaRuntimeInfo = {
+  path: string;
+  version: string;
+  source: string;
+};
+
+type JavaSettingsProps = {
+  language: Language;
+  systemMemoryGb: number;
+  showNotification: (kind: NotificationKind, message: string, options?: { sound?: boolean }) => void;
+  profileId?: string | null;
+  embedded?: boolean;
+};
+
+type ValidationState = {
+  xmsError: string | null;
+  xmxError: string | null;
+  generalError: string | null;
+};
+
+type JavaManageMode = "verify" | "reinstall";
+
+const AVAILABLE_JAVA_MAJORS = [8, 17, 21, 25] as const;
+
+function parseRuntimeMajor(version: string): number | null {
+  const match = version.match(/Java\s+(\d+)/i);
+  if (!match) return null;
+  const major = Number(match[1]);
+  return Number.isFinite(major) ? major : null;
+}
+
+function parseMemoryToMb(raw: string): number | null {
+  const s = raw.trim();
+  if (!s) return null;
+  const match = s.match(/^(\d+)\s*([GgMm])?[Bb]?$/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const suffix = (match[2] ?? "M").toUpperCase();
+  if (suffix === "G") return value * 1024;
+  return value;
+}
+
+function formatMbToDisplay(mb: number): string {
+  if (!Number.isFinite(mb) || mb <= 0) return "";
+  if (mb % 1024 === 0) return `${mb / 1024}G`;
+  return `${mb}M`;
+}
+
+export function JavaSettingsTab({
+  language,
+  systemMemoryGb,
+  showNotification,
+  profileId,
+  embedded = false,
+}: JavaSettingsProps) {
+  const tt = useT(language);
+  const [settings, setSettings] = useState<JavaSettings | null>(null);
+  const [initialSettings, setInitialSettings] = useState<JavaSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [runtimes, setRuntimes] = useState<JavaRuntimeInfo[]>([]);
+  const [loadingRuntimes, setLoadingRuntimes] = useState(false);
+  const [verifyingJava, setVerifyingJava] = useState(false);
+  const [reinstallingJava, setReinstallingJava] = useState(false);
+  const [javaManageMode, setJavaManageMode] = useState<JavaManageMode | null>(null);
+  const [selectedJavaMajors, setSelectedJavaMajors] = useState<number[]>([]);
+  const [validation, setValidation] = useState<ValidationState>({
+    xmsError: null,
+    xmxError: null,
+    generalError: null,
+  });
+  const [validationOutput, setValidationOutput] = useState<{
+    ok: boolean;
+    warnings: string[];
+    errors: string[];
+    output: string;
+  } | null>(null);
+
+  const effectiveSettings: JavaSettings = useMemo(
+    () => settings ?? {
+      use_custom_jvm_args: false,
+      java_path: null,
+      xms: null,
+      xmx: null,
+      jvm_args: null,
+      preset: "balanced",
+      prefer_ipv6_network: false,
+    },
+    [settings],
+  );
+
+  const maxAllowedMb = Math.max(1024, (systemMemoryGb - 2) * 1024);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setLoadingRuntimes(true);
+      try {
+        const [data, detected] = await Promise.all([
+          profileId
+            ? invoke<JavaSettings>("get_profile_java_settings", { id: profileId })
+            : invoke<JavaSettings>("get_java_settings"),
+          invoke<JavaRuntimeInfo[]>("list_installed_java_runtimes").catch(
+            () => [] as JavaRuntimeInfo[],
+          ),
+        ]);
+        if (cancelled) return;
+        setSettings(data);
+        setInitialSettings(data);
+        setRuntimes(detected);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          showNotification(
+            "error",
+            tt("javaSettings.toast.loadFailedUsingDefaults"),
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setLoadingRuntimes(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [language, profileId, showNotification, tt]);
+
+  const updateField = <K extends keyof JavaSettings>(key: K, value: JavaSettings[K]) => {
+    setSettings((prev) => ({
+      ...(prev ?? {
+        use_custom_jvm_args: false,
+        java_path: null,
+        xms: null,
+        xmx: null,
+        jvm_args: null,
+        preset: "balanced",
+        prefer_ipv6_network: false,
+      }),
+      [key]: value,
+    }));
+  };
+
+  const applyPreset = (preset: "balanced" | "performance" | "low_memory") => {
+    let xms: string;
+    let xmx: string;
+    let jvm: string;
+
+    if (preset === "balanced") {
+      xms = "2G";
+      xmx = "4G";
+      jvm = "-XX:+UseG1GC -XX:MaxGCPauseMillis=50";
+    } else if (preset === "performance") {
+      xms = "4G";
+      xmx = "8G";
+      jvm = "-XX:+UseG1GC -XX:MaxGCPauseMillis=40 -XX:+UnlockExperimentalVMOptions";
+    } else {
+      xms = "1G";
+      xmx = "2G";
+      jvm = "-XX:+UseG1GC";
+    }
+
+    updateField("xms", xms);
+    updateField("xmx", xmx);
+    updateField("jvm_args", jvm);
+    updateField("preset", preset);
+  };
+
+  const validateMemory = (): boolean => {
+    let xmsError: string | null = null;
+    let xmxError: string | null = null;
+    let generalError: string | null = null;
+
+    const xmsRaw = effectiveSettings.xms ?? "";
+    const xmxRaw = effectiveSettings.xmx ?? "";
+    const xmsMb = xmsRaw ? parseMemoryToMb(xmsRaw) : null;
+    const xmxMb = xmxRaw ? parseMemoryToMb(xmxRaw) : null;
+
+    if (xmsRaw && xmsMb == null) {
+      xmsError = tt("javaSettings.validation.invalidFormatXms");
+    }
+    if (xmxRaw && xmxMb == null) {
+      xmxError = tt("javaSettings.validation.invalidFormatXmx");
+    }
+
+    if (xmsMb != null && xmxMb != null) {
+      if (xmsMb > xmxMb) {
+        generalError = tt("javaSettings.validation.minGreaterThanMax");
+      }
+      if (xmxMb > maxAllowedMb) {
+        generalError = tt("javaSettings.validation.maxAboveRecommended", {
+          gb: Math.floor(maxAllowedMb / 1024),
+        });
+      }
+    }
+
+    setValidation({ xmsError, xmxError, generalError });
+    return !xmsError && !xmxError && !generalError;
+  };
+
+  const handleSave = async () => {
+    if (!validateMemory()) return;
+    if (!settings) return;
+    setSaving(true);
+    try {
+      if (profileId) {
+        await invoke("set_profile_java_settings", { id: profileId, settings });
+      } else {
+        await invoke("set_java_settings", { settings });
+      }
+      setInitialSettings(settings);
+      showNotification(
+        "success",
+        tt("javaSettings.toast.saved"),
+      );
+    } catch (e) {
+      console.error(e);
+      const detail = e instanceof Error ? e.message : String(e ?? "");
+      showNotification(
+        "error",
+        detail.trim()
+          ? `${tt("javaSettings.toast.saveFailed")} ${detail}`
+          : tt("javaSettings.toast.saveFailed"),
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleResetToRecommended = () => {
+    const next: JavaSettings = {
+      use_custom_jvm_args: false,
+      java_path: null,
+      xms: null,
+      xmx: null,
+      jvm_args: null,
+      preset: "balanced",
+      prefer_ipv6_network: false,
+    };
+    setSettings(next);
+    setValidation({ xmsError: null, xmxError: null, generalError: null });
+    setValidationOutput(null);
+  };
+
+  const handleCancel = () => {
+    setSettings(initialSettings);
+    setValidation({ xmsError: null, xmxError: null, generalError: null });
+    setValidationOutput(null);
+  };
+
+  const handleBrowseJava = async () => {
+    try {
+      const path = await openFileDialog({
+        multiple: false,
+        directory: false,
+        filters: [
+          {
+            name: tt("javaSettings.dialog.javaFilterName"),
+            extensions: ["exe", "bat", "cmd", "sh", "bin", "jar"],
+          },
+        ],
+      });
+      if (typeof path === "string" && path.trim()) {
+        updateField("java_path", path);
+      }
+    } catch (e) {
+      console.error(e);
+      showNotification(
+        "error",
+        tt("javaSettings.toast.chooseJavaFailed"),
+      );
+    }
+  };
+
+  const handleSelectRuntime = (path: string) => {
+    updateField("java_path", path.trim().length === 0 ? null : path);
+  };
+
+  const selectedRuntimePath = effectiveSettings.java_path?.trim() ?? "";
+  const runtimePaths = useMemo(
+    () => new Set(runtimes.map((runtime) => runtime.path)),
+    [runtimes],
+  );
+  const isCustomRuntimePath =
+    selectedRuntimePath.length > 0 && !runtimePaths.has(selectedRuntimePath);
+
+  const handleDetectJava = async () => {
+    setDetecting(true);
+    try {
+      const detected = await invoke<JavaRuntimeInfo[]>("detect_java_runtimes");
+      setRuntimes(detected);
+      if (!detected || detected.length === 0) {
+        showNotification(
+          "warning",
+          tt("javaSettings.toast.noSuitableRuntimes"),
+        );
+        return;
+      }
+      const preferred = detected[0];
+      updateField("java_path", preferred.path);
+      showNotification(
+        "success",
+        tt("javaSettings.toast.detected", { version: preferred.version }),
+      );
+    } catch (e) {
+      console.error(e);
+      showNotification(
+        "error",
+        tt("javaSettings.toast.detectFailed"),
+      );
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const handleValidateArgs = async () => {
+    if (!settings) return;
+    try {
+      const javaPath = settings.java_path ?? null;
+      const args = settings.jvm_args ?? "";
+      const res = await invoke<{
+        ok: boolean;
+        warnings: string[];
+        errors: string[];
+        output: string;
+      }>("validate_java_args", {
+        java_path: javaPath,
+        args,
+      });
+      setValidationOutput(res);
+      if (res.ok && res.errors.length === 0) {
+        showNotification(
+          "success",
+          tt("javaSettings.toast.validateOk"),
+        );
+      } else if (res.errors.length > 0) {
+        showNotification(
+          "error",
+          tt("javaSettings.toast.validateErrors"),
+        );
+      } else if (res.warnings.length > 0) {
+        showNotification(
+          "warning",
+          tt("javaSettings.toast.validateWarnings"),
+        );
+      }
+    } catch (e) {
+      console.error(e);
+      showNotification(
+        "error",
+        tt("javaSettings.toast.validateFailed"),
+      );
+    }
+  };
+
+  const refreshInstalledRuntimes = async () => {
+    try {
+      const installed = await invoke<JavaRuntimeInfo[]>("list_installed_java_runtimes");
+      setRuntimes(installed);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const installedJavaMajors = useMemo(() => {
+    const majors = new Set<number>();
+    for (const runtime of runtimes) {
+      if (runtime.source !== "Mojang runtime") continue;
+      const major = parseRuntimeMajor(runtime.version);
+      if (major != null) majors.add(major);
+    }
+    return majors;
+  }, [runtimes]);
+
+  const openJavaManageDialog = async (mode: JavaManageMode) => {
+    let installedMajors = installedJavaMajors;
+    try {
+      const mojangInstalled = await invoke<JavaRuntimeInfo[]>("list_installed_java_runtimes");
+      const majors = new Set<number>();
+      for (const runtime of mojangInstalled) {
+        const major = parseRuntimeMajor(runtime.version);
+        if (major != null) majors.add(major);
+      }
+      installedMajors = majors;
+      setRuntimes((prev) => {
+        const system = prev.filter((runtime) => runtime.source !== "Mojang runtime");
+        const mojangPaths = new Set(mojangInstalled.map((runtime) => runtime.path));
+        const extraSystem = system.filter((runtime) => !mojangPaths.has(runtime.path));
+        return [...mojangInstalled, ...extraSystem];
+      });
+    } catch (e) {
+      console.error(e);
+    }
+
+    const preselected = AVAILABLE_JAVA_MAJORS.filter((major) => installedMajors.has(major));
+    setSelectedJavaMajors(
+      preselected.length > 0 ? [...preselected] : [...AVAILABLE_JAVA_MAJORS],
+    );
+    setJavaManageMode(mode);
+  };
+
+  const toggleJavaMajor = (major: number) => {
+    setSelectedJavaMajors((prev) =>
+      prev.includes(major) ? prev.filter((value) => value !== major) : [...prev, major].sort((a, b) => a - b),
+    );
+  };
+
+  const handleConfirmJavaManage = async () => {
+    if (!javaManageMode) return;
+    if (selectedJavaMajors.length === 0) {
+      showNotification("warning", tt("javaSettings.manageDialog.noneSelected"));
+      return;
+    }
+
+    const majors = [...selectedJavaMajors];
+    const mode = javaManageMode;
+    setJavaManageMode(null);
+
+    if (mode === "verify") {
+      setVerifyingJava(true);
+      try {
+        const result = await invoke<{
+          is_ok: boolean;
+          checked_files: number;
+          missing_files: number;
+          corrupted_files: number;
+          runtimes_checked: number;
+        }>("verify_java_runtimes", { majors });
+
+        if (result.runtimes_checked === 0) {
+          showNotification("warning", tt("javaSettings.toast.verifyEmpty"));
+          return;
+        }
+
+        if (result.is_ok) {
+          showNotification(
+            "success",
+            tt("javaSettings.toast.verifyOk", {
+              checked: result.checked_files,
+              runtimes: result.runtimes_checked,
+            }),
+          );
+        } else {
+          showNotification(
+            "warning",
+            tt("javaSettings.toast.verifyProblems", {
+              missing: result.missing_files,
+              corrupted: result.corrupted_files,
+              checked: result.checked_files,
+            }),
+          );
+        }
+      } catch (e) {
+        console.error(e);
+        showNotification("error", tt("javaSettings.toast.verifyFailed"));
+      } finally {
+        setVerifyingJava(false);
+      }
+      return;
+    }
+
+    setReinstallingJava(true);
+    try {
+      const installed = await invoke<JavaRuntimeInfo[]>("reinstall_java_runtimes", {
+        majors,
+      });
+      setRuntimes(installed);
+      showNotification(
+        "success",
+        tt("javaSettings.toast.reinstallOk", {
+          count: installed.length,
+        }),
+      );
+    } catch (e) {
+      console.error(e);
+      showNotification("error", tt("javaSettings.toast.reinstallFailed"));
+      await refreshInstalledRuntimes();
+    } finally {
+      setReinstallingJava(false);
+    }
+  };
+
+  const javaBusy = verifyingJava || reinstallingJava || detecting || loadingRuntimes;
+
+  const xmsMb = effectiveSettings.xms ? parseMemoryToMb(effectiveSettings.xms) : null;
+  const xmxMb = effectiveSettings.xmx ? parseMemoryToMb(effectiveSettings.xmx) : null;
+
+  const memoryHint = tt("javaSettings.memory.hint");
+
+  return (
+    <div
+      className={
+        embedded
+          ? "flex flex-col gap-3"
+          : "flex max-h-[clamp(240px,45vh,520px)] flex-col gap-3 overflow-y-auto pr-1"
+      }
+    >
+      {javaManageMode && (
+        <div
+          className="glass-overlay fixed inset-0 z-[220] flex items-center justify-center"
+          onClick={() => setJavaManageMode(null)}
+        >
+          <div
+            className="glass-modal max-w-md p-5"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <h3 className="mb-1 text-sm font-semibold text-white">
+              {javaManageMode === "verify"
+                ? tt("javaSettings.manageDialog.verifyTitle")
+                : tt("javaSettings.manageDialog.reinstallTitle")}
+            </h3>
+            <p className="mb-3 text-xs text-white/70">
+              {javaManageMode === "verify"
+                ? tt("javaSettings.manageDialog.verifyHint")
+                : tt("javaSettings.manageDialog.reinstallHint")}
+            </p>
+            <div className="mb-3 space-y-1.5">
+              {AVAILABLE_JAVA_MAJORS.map((major) => {
+                const installed = installedJavaMajors.has(major);
+                const checked = selectedJavaMajors.includes(major);
+                return (
+                  <label
+                    key={major}
+                    className="glass-control flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm text-white/90"
+                  >
+                    <span className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        className="accent-checkbox"
+                        checked={checked}
+                        onChange={() => toggleJavaMajor(major)}
+                      />
+                      <span className="font-semibold">Java {major}</span>
+                    </span>
+                    <span className={installed ? "text-emerald-300/80" : "text-white/40"}>
+                      {installed
+                        ? tt("javaSettings.manageDialog.installed")
+                        : tt("javaSettings.manageDialog.notInstalled")}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="mb-4 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedJavaMajors([...AVAILABLE_JAVA_MAJORS])}
+                className="btn btn-sm btn-ghost"
+              >
+                {tt("javaSettings.manageDialog.selectAll")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedJavaMajors([])}
+                className="btn btn-sm btn-ghost"
+              >
+                {tt("javaSettings.manageDialog.selectNone")}
+              </button>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setJavaManageMode(null)}
+                className="btn btn-sm btn-ghost"
+              >
+                {tt("common.cancel")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmJavaManage()}
+                disabled={selectedJavaMajors.length === 0}
+                className="btn btn-sm btn-accent"
+              >
+                {javaManageMode === "verify"
+                  ? tt("javaSettings.manageDialog.verifyConfirm")
+                  : tt("javaSettings.manageDialog.reinstallConfirm")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {loading ? (
+        <div className="flex h-32 items-center justify-center text-sm text-white/70">
+          {tt("javaSettings.loading")}
+        </div>
+      ) : (
+        <>
+          <div className="ui-meta">
+            {tt("javaSettings.description")}
+          </div>
+          {profileId && (
+            <div className="text-xs text-warn-fg/80">
+              {tt("javaSettings.runtime.profileHint")}
+            </div>
+          )}
+
+          <div className="glass-inset px-4 py-3 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-white/90">
+                {tt("javaSettings.runtime.title")}
+              </span>
+              <span className="text-[0.8125rem] text-white/50">
+                {tt("javaSettings.runtime.hint")}
+              </span>
+            </div>
+            <select
+              value={selectedRuntimePath}
+              onChange={(e) => handleSelectRuntime(e.target.value)}
+              className="launcher-select glass-control w-full px-3 text-sm outline-none"
+            >
+              <option value="">{tt("javaSettings.runtime.auto")}</option>
+              {runtimes.map((runtime) => (
+                <option key={runtime.path} value={runtime.path}>
+                  {runtime.version}
+                </option>
+              ))}
+              {isCustomRuntimePath && (
+                <option value={selectedRuntimePath}>
+                  {tt("javaSettings.runtime.custom")}
+                </option>
+              )}
+            </select>
+            <div className="flex items-center gap-2 flex-nowrap">
+              <div className="relative min-w-0 flex-1">
+                <input
+                  type="text"
+                  value={effectiveSettings.java_path ?? ""}
+                  onChange={(e) =>
+                    updateField(
+                      "java_path",
+                      e.target.value.trim().length === 0 ? null : e.target.value,
+                    )
+                  }
+                  placeholder={tt("javaSettings.javaPath.placeholder")}
+                  className={`glass-control w-full px-3 py-2 text-sm text-white placeholder:text-white/35 focus:outline-none ${
+                    effectiveSettings.java_path ? "pr-9" : ""
+                  }`}
+                />
+                <InputClearButton
+                  value={effectiveSettings.java_path ?? ""}
+                  onClear={() => updateField("java_path", null)}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2"
+                  aria-label={tt("common.clear")}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleDetectJava}
+                disabled={javaBusy}
+                className="btn btn-sm btn-tint"
+              >
+                {tt("javaSettings.actions.detect")}
+              </button>
+              <button
+                type="button"
+                onClick={handleBrowseJava}
+                disabled={javaBusy}
+                className="btn btn-sm btn-soft"
+              >
+                {tt("javaSettings.actions.browse")}
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void openJavaManageDialog("verify")}
+                disabled={javaBusy}
+                className="btn btn-sm btn-soft"
+              >
+                {verifyingJava
+                  ? tt("javaSettings.actions.verifyChecking")
+                  : tt("javaSettings.actions.verify")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void openJavaManageDialog("reinstall")}
+                disabled={javaBusy}
+                className="btn btn-sm btn-soft"
+              >
+                {reinstallingJava
+                  ? tt("javaSettings.actions.reinstalling")
+                  : tt("javaSettings.actions.reinstall")}
+              </button>
+              <span className="text-[0.8125rem] text-white/45">
+                {tt("javaSettings.runtime.manageHint")}
+              </span>
+            </div>
+          </div>
+
+          <div className="glass-inset divide-y divide-[color:var(--seam)] px-4">
+            <div className="flex items-center justify-between gap-4 py-3">
+              <span className="min-w-0 text-sm text-white/90" title={tt("javaSettings.useCustomArgs.hint")}>
+                {tt("javaSettings.useCustomArgs.label")}
+              </span>
+              <SettingsSwitch
+                label={tt("javaSettings.useCustomArgs.label")}
+                checked={effectiveSettings.use_custom_jvm_args}
+                onChange={(value) => updateField("use_custom_jvm_args", value)}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 py-3">
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="text-sm text-white/90">{tt("javaSettings.preferIpv6.label")}</span>
+                <span className="ui-meta">{tt("javaSettings.preferIpv6.hint")}</span>
+              </span>
+              <SettingsSwitch
+                label={tt("javaSettings.preferIpv6.label")}
+                checked={effectiveSettings.prefer_ipv6_network}
+                onChange={(value) => updateField("prefer_ipv6_network", value)}
+              />
+            </div>
+          </div>
+
+          {effectiveSettings.use_custom_jvm_args && (
+            <>
+              <div className="grid grid-cols-1 gap-3">
+                <div className="space-y-2 glass-inset px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-white/90">
+                    {tt("javaSettings.memory.title")}
+                  </span>
+                  <span className="text-[0.8125rem] text-white/60">{memoryHint}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-[0.8125rem] text-white/60">
+                      MIN (Xms)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={effectiveSettings.xms ?? ""}
+                        onChange={(e) => updateField("xms", e.target.value || null)}
+                        placeholder={tt("javaSettings.memory.xmsPlaceholder")}
+                        className={`glass-control w-full px-3 py-2 text-sm text-white placeholder:text-white/35 focus:outline-none ${
+                          effectiveSettings.xms ? "pr-9" : ""
+                        }`}
+                      />
+                      <InputClearButton
+                        value={effectiveSettings.xms ?? ""}
+                        onClear={() => updateField("xms", null)}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2"
+                        aria-label={tt("common.clear")}
+                      />
+                    </div>
+                    {validation.xmsError && (
+                      <p className="mt-1 text-[0.8125rem] text-danger-hi">{validation.xmsError}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[0.8125rem] text-white/60">
+                      MAX (Xmx)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={effectiveSettings.xmx ?? ""}
+                        onChange={(e) => updateField("xmx", e.target.value || null)}
+                        placeholder={tt("javaSettings.memory.xmxPlaceholder")}
+                        className={`glass-control w-full px-3 py-2 text-sm text-white placeholder:text-white/35 focus:outline-none ${
+                          effectiveSettings.xmx ? "pr-9" : ""
+                        }`}
+                      />
+                      <InputClearButton
+                        value={effectiveSettings.xmx ?? ""}
+                        onClear={() => updateField("xmx", null)}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2"
+                        aria-label={tt("common.clear")}
+                      />
+                    </div>
+                    {validation.xmxError && (
+                      <p className="mt-1 text-[0.8125rem] text-danger-hi">{validation.xmxError}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[0.8125rem] text-white/70">
+                  <span className="mr-1">
+                    {tt("javaSettings.memory.quickPresets")}
+                  </span>
+                  {["1G", "2G", "4G", "8G"].map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      className="btn btn-sm btn-soft"
+                      onClick={() => {
+                        updateField("xms", v);
+                        updateField("xmx", v);
+                      }}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                  {xmsMb != null && xmxMb != null && (
+                    <span className="ml-auto text-[0.8125rem] text-white/60">
+                      {tt("javaSettings.memory.currentPair", {
+                        xms: formatMbToDisplay(xmsMb),
+                        xmx: formatMbToDisplay(xmxMb),
+                      })}
+                    </span>
+                  )}
+                </div>
+                {validation.generalError && (
+                  <p className="mt-1 text-[0.8125rem] text-warn-hi">{validation.generalError}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="glass-inset px-4 py-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-white/90">
+                    {tt("javaSettings.jvmArgs.title")}
+                  </span>
+                  <span className="text-[0.8125rem] text-white/60">
+                    {tt("javaSettings.jvmArgs.hint")}
+                  </span>
+                </div>
+                <div className="relative">
+                  <textarea
+                    value={effectiveSettings.jvm_args ?? ""}
+                    onChange={(e) => updateField("jvm_args", e.target.value || null)}
+                    rows={7}
+                    className={`glass-control w-full px-3 py-2 text-xs font-mono text-white placeholder:text-white/30 focus:outline-none ${
+                      effectiveSettings.jvm_args ? "pr-9" : ""
+                    }`}
+                    placeholder={
+                      tt("javaSettings.jvmArgs.placeholder")
+                    }
+                  />
+                  <InputClearButton
+                    value={effectiveSettings.jvm_args ?? ""}
+                    onClear={() => updateField("jvm_args", null)}
+                    className="absolute right-2 top-2"
+                    aria-label={tt("common.clear")}
+                  />
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[0.8125rem] text-white/65">
+                  <span className="text-white/80">
+                    {tt("javaSettings.jvmArgs.placeholdersLabel")}
+                  </span>
+                  <code className="tag font-mono">${"{classpath}"}</code>
+                  <code className="tag font-mono">${"{natives}"}</code>
+                  <code className="tag font-mono">${"{gameDir}"}</code>
+                  <code className="tag font-mono">${"{assetsDir}"}</code>
+                  <code className="tag font-mono">${"{version}"}</code>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-[0.8125rem] text-white/75">
+                  <span className="mr-1">
+                    {tt("javaSettings.jvmArgs.recommendedPresets")}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("balanced")}
+                    className="btn btn-sm btn-soft"
+                  >
+                    {tt("javaSettings.presets.balanced")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("performance")}
+                    className="btn btn-sm btn-soft"
+                  >
+                    {tt("javaSettings.presets.performance")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("low_memory")}
+                    className="btn btn-sm btn-soft"
+                  >
+                    {tt("javaSettings.presets.lowMemory")}
+                  </button>
+                </div>
+              </div>
+
+              <div className="glass-inset px-4 py-3">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleValidateArgs}
+                    className="btn btn-sm btn-soft"
+                  >
+                    {tt("javaSettings.actions.validate")}
+                  </button>
+                </div>
+
+                {validationOutput && (
+                  <div className="mt-2 max-h-40 overflow-y-auto glass-inset px-3 py-2 text-[0.8125rem] text-white/80">
+                    {validationOutput.errors.length > 0 && (
+                      <div className="mb-2">
+                        <div className="mb-1 font-semibold text-danger-hi">
+                          {tt("javaSettings.validationOutput.errors")}
+                        </div>
+                        <ul className="list-disc space-y-0.5 pl-4">
+                          {validationOutput.errors.map((e, i) => (
+                            <li key={`e-${i}`}>{e}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {validationOutput.warnings.length > 0 && (
+                      <div className="mb-2">
+                        <div className="mb-1 font-semibold text-warn-hi">
+                          {tt("javaSettings.validationOutput.warnings")}
+                        </div>
+                        <ul className="list-disc space-y-0.5 pl-4">
+                          {validationOutput.warnings.map((w, i) => (
+                            <li key={`w-${i}`}>{w}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {validationOutput.output && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-[0.8125rem] text-white/60">
+                          {tt("javaSettings.validationOutput.showJavaVersion")}
+                        </summary>
+                        <pre className="mt-1 whitespace-pre-wrap text-[0.8125rem] text-white/70">
+                          {validationOutput.output}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+            </>
+          )}
+
+          <div className="glass-inset px-4 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className="btn btn-sm btn-accent"
+              >
+                {tt("javaSettings.actions.save")}
+              </button>
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="btn btn-sm btn-ghost"
+              >
+                {tt("javaSettings.actions.cancel")}
+              </button>
+              <button
+                type="button"
+                onClick={handleResetToRecommended}
+                className="btn btn-sm btn-ghost"
+              >
+                {tt("javaSettings.actions.resetRecommended")}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+

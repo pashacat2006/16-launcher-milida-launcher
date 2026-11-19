@@ -1,0 +1,6 @@
+/target/
+/gen/
+/WixTools/
+/logs/
+*.log
+hs_err_pid*.log

@@ -1,0 +1,208 @@
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+use tauri::{command, AppHandle, Emitter};
+
+use crate::app::paths::launcher_data_dir;
+use crate::infra::fs_atomic::write_atomic;
+use crate::infra::process_probe;
+use crate::models::events::{
+    GameProcessExitedPayload, PlaytimeUpdatedPayload, EVENT_GAME_PROCESS_EXITED,
+    EVENT_PLAYTIME_UPDATED,
+};
+use crate::services::game::profiles::{
+    finish_playtime_session, flush_active_playtime, start_playtime_session,
+};
+use crate::services::game::runtime::{clear_game_lan_port, observe_game_log_line};
+use crate::services::game::state::{GAME_PROCESS_MAX_HEAP_BYTES, GAME_PROCESS_PID};
+
+const SESSION_FILE: &str = "running_game.json";
+const START_TIME_TOLERANCE_SECS: u64 = 2;
+const PLAYTIME_FLUSH_INTERVAL: Duration = Duration::from_secs(30);
+const LOG_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+
+static WATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct StoredSession {
+    pid: u32,
+    process_start_time: u64,
+    profile_id: Option<String>,
+    started_at_ms: u64,
+    #[serde(default)]
+    max_heap_bytes: u64,
+    #[serde(default)]
+    game_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct RunningGameSession {
+    pub profile_id: Option<String>,
+    pub started_at_ms: u64,
+}
+
+fn session_path() -> Option<std::path::PathBuf> {
+    launcher_data_dir().ok().map(|dir| dir.join(SESSION_FILE))
+}
+
+fn probe_process(pid: u32) -> Option<(String, u64)> {
+    process_probe::snapshot(pid).map(|p| (p.name, p.start_time))
+}
+
+fn is_java_name(name: &str) -> bool {
+    name.contains("java")
+}
+
+pub(crate) fn remember_game_session(pid: u32, profile_id: Option<String>, game_dir: &Path) {
+    let Some(path) = session_path() else { return };
+    let Some((_, process_start_time)) = probe_process(pid) else {
+        return;
+    };
+    let started_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let session = StoredSession {
+        pid,
+        process_start_time,
+        profile_id,
+        started_at_ms,
+        max_heap_bytes: GAME_PROCESS_MAX_HEAP_BYTES.load(Ordering::SeqCst),
+        game_dir: Some(game_dir.to_path_buf()),
+    };
+    match serde_json::to_vec(&session) {
+        Ok(bytes) => {
+            if let Err(e) = write_atomic(&path, bytes) {
+                eprintln!("[Launch] Не удалось сохранить сессию игры: {e}");
+            }
+        }
+        Err(e) => eprintln!("[Launch] Не удалось сериализовать сессию игры: {e}"),
+    }
+}
+
+pub(crate) fn forget_game_session() {
+    if let Some(path) = session_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn load_alive_session() -> Option<StoredSession> {
+    let path = session_path()?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let session: StoredSession = match serde_json::from_str(&text) {
+        Ok(s) => s,
+        Err(_) => {
+            forget_game_session();
+            return None;
+        }
+    };
+
+    let alive = probe_process(session.pid).is_some_and(|(name, start_time)| {
+        is_java_name(&name)
+            && start_time.abs_diff(session.process_start_time) <= START_TIME_TOLERANCE_SECS
+    });
+    if alive {
+        Some(session)
+    } else {
+        forget_game_session();
+        None
+    }
+}
+
+fn spawn_game_log_watcher(app: AppHandle, pid: u32, game_dir: PathBuf) {
+    std::thread::spawn(move || {
+        let log_path = game_dir.join("logs").join("latest.log");
+        let Ok(file) = std::fs::File::open(&log_path) else {
+            eprintln!("[Launch] Не удалось открыть {}", log_path.display());
+            return;
+        };
+        let mut reader = BufReader::new(file);
+        let mut line = Vec::new();
+        while process_probe::is_alive(pid) {
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => std::thread::sleep(LOG_WATCH_INTERVAL),
+                Ok(_) if line.ends_with(b"\n") => {
+                    observe_game_log_line(&app, &String::from_utf8_lossy(&line));
+                    line.clear();
+                }
+                Ok(_) => {}
+            }
+        }
+    });
+}
+
+fn spawn_session_watcher(app: AppHandle, pid: u32) {
+    if WATCHER_ACTIVE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let mut last_flush_at = Instant::now();
+        while process_probe::is_alive(pid) {
+            if last_flush_at.elapsed() >= PLAYTIME_FLUSH_INTERVAL {
+                if let Some((profile_id, delta_seconds, total_seconds)) = flush_active_playtime() {
+                    let _ = app.emit(
+                        EVENT_PLAYTIME_UPDATED,
+                        PlaytimeUpdatedPayload {
+                            profile_id,
+                            delta_seconds,
+                            total_seconds,
+                        },
+                    );
+                }
+                last_flush_at = Instant::now();
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+
+        forget_game_session();
+        let _ = GAME_PROCESS_PID.compare_exchange(pid as u64, 0, Ordering::SeqCst, Ordering::SeqCst);
+        clear_game_lan_port(&app);
+        crate::infra::window_idle::sync(&app);
+        let _ = app.emit(
+            EVENT_GAME_PROCESS_EXITED,
+            GameProcessExitedPayload { exit_code: None },
+        );
+        if let Some((profile_id, delta_seconds, total_seconds)) = finish_playtime_session() {
+            let _ = app.emit(
+                EVENT_PLAYTIME_UPDATED,
+                PlaytimeUpdatedPayload {
+                    profile_id,
+                    delta_seconds,
+                    total_seconds,
+                },
+            );
+        }
+        crate::services::game::world_stats::finish_session(&app);
+        WATCHER_ACTIVE.store(false, Ordering::SeqCst);
+    });
+}
+
+#[command]
+pub fn get_running_game_session(app: AppHandle) -> Option<RunningGameSession> {
+    let session = load_alive_session()?;
+    let pid = session.pid as u64;
+
+    let current = GAME_PROCESS_PID.load(Ordering::SeqCst);
+    if current == 0 {
+        GAME_PROCESS_MAX_HEAP_BYTES.store(session.max_heap_bytes, Ordering::SeqCst);
+        GAME_PROCESS_PID.store(pid, Ordering::SeqCst);
+        crate::infra::window_idle::sync(&app);
+        if let Some(profile_id) = session.profile_id.as_deref() {
+            start_playtime_session(profile_id);
+        }
+        if let Some(game_dir) = session.game_dir.clone() {
+            spawn_game_log_watcher(app.clone(), session.pid, game_dir);
+        }
+        spawn_session_watcher(app, session.pid);
+    } else if current != pid {
+        return None;
+    }
+
+    Some(RunningGameSession {
+        profile_id: session.profile_id,
+        started_at_ms: session.started_at_ms,
+    })
+}

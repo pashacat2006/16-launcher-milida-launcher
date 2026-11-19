@@ -1,0 +1,617 @@
+﻿#![allow(dead_code, non_snake_case)]
+
+use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::Duration;
+
+use once_cell::sync::Lazy;
+use rand::{distributions::Alphanumeric, Rng};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+
+use crate::app::paths::launcher_data_dir;
+use crate::infra::fs_atomic::write_atomic;
+use crate::services::game::accounts::{get_profile, save_full_profile};
+
+fn http_client() -> Client {
+    Client::builder()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(15))
+        .user_agent("16Launcher/1.0")
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
+pub const ELY_CLIENT_ID: &str = "16launcher4";
+pub const OAUTH2_AUTH_URL: &str = "https://account.ely.by/oauth2/v1";
+pub const OAUTH2_TOKEN_URL: &str = "https://account.ely.by/api/oauth2/v1/token";
+pub const YGGDRASIL_AUTH_URL: &str = "https://authserver.ely.by/auth/authenticate";
+pub const YGGDRASIL_VALIDATE_URL: &str = "https://authserver.ely.by/auth/validate";
+pub const YGGDRASIL_INVALIDATE_URL: &str = "https://authserver.ely.by/auth/invalidate";
+pub const REDIRECT_URI: &str = "http://localhost:25568/callback";
+const AUTHLIB_INJECTOR_LATEST_RELEASE_API: &str =
+    "https://api.github.com/repos/yushijinhun/authlib-injector/releases/latest";
+const AUTHLIB_INJECTOR_META_URLS: &[&str] = &[
+    "https://authlib-injector.yushi.moe/artifact/latest.json",
+    "https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/latest.json",
+];
+const AUTHLIB_INJECTOR_UPDATE_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
+static AUTHLIB_INJECTOR_CHECKED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    assets: Vec<GithubReleaseAsset>,
+}
+#[derive(Debug, Deserialize)]
+struct GithubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthlibArtifactMeta {
+    version: String,
+    download_url: String,
+    #[serde(default)]
+    checksums: Option<AuthlibArtifactChecksums>,
+}
+#[derive(Debug, Deserialize)]
+struct AuthlibArtifactChecksums {
+    #[serde(default)]
+    sha256: Option<String>,
+}
+
+struct AuthlibRelease {
+    version: String,
+    download_url: String,
+    sha256: Option<String>,
+}
+
+async fn download_jar_bytes(client: &Client, url: &str) -> Result<Vec<u8>, String> {
+    let jar_resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("error sending request for url ({url}): {e}"))?;
+    let status = jar_resp.status();
+    if !status.is_success() {
+        let text = jar_resp.text().await.unwrap_or_else(|_| "<no body>".into());
+        return Err(format!("authlib-injector download {status}: {text}"));
+    }
+    jar_resp
+        .bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("authlib-injector download body: {e}"))
+}
+
+async fn release_from_meta(client: &Client, meta_url: &str) -> Result<AuthlibRelease, String> {
+    let resp = client
+        .get(meta_url)
+        .send()
+        .await
+        .map_err(|e| format!("error sending request for url ({meta_url}): {e}"))?;
+    let meta: AuthlibArtifactMeta = handle_resp(resp, "authlib-injector latest meta").await?;
+    Ok(AuthlibRelease {
+        version: meta.version.trim().to_string(),
+        download_url: meta.download_url,
+        sha256: meta.checksums.and_then(|c| c.sha256),
+    })
+}
+
+async fn release_from_github(client: &Client) -> Result<AuthlibRelease, String> {
+    let release: GithubRelease = handle_resp(
+        client
+            .get(AUTHLIB_INJECTOR_LATEST_RELEASE_API)
+            .send()
+            .await
+            .map_err(|e| {
+                format!(
+                    "error sending request for url ({AUTHLIB_INJECTOR_LATEST_RELEASE_API}): {e}"
+                )
+            })?,
+        "GitHub API latest release",
+    )
+    .await?;
+
+    let asset = release
+        .assets
+        .into_iter()
+        .find(|a| {
+            let n = a.name.to_ascii_lowercase();
+            n.ends_with(".jar") && n.contains("authlib-injector")
+        })
+        .ok_or("В релизе не найден authlib-injector.jar")?;
+
+    Ok(AuthlibRelease {
+        version: release.tag_name.trim().trim_start_matches('v').to_string(),
+        download_url: asset.browser_download_url,
+        sha256: None,
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+async fn fetch_release(
+    client: &Client,
+    release: AuthlibRelease,
+    installed: Option<&str>,
+) -> Result<Option<(String, Vec<u8>)>, String> {
+    if installed == Some(release.version.as_str()) {
+        return Ok(None);
+    }
+    let bytes = download_jar_bytes(client, &release.download_url).await?;
+    if bytes.len() < 2 || &bytes[..2] != b"PK" {
+        return Err(format!(
+            "Скачанный файл {} не является корректным JAR.",
+            release.download_url
+        ));
+    }
+    if let Some(expected) = release.sha256.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if !sha256_hex(&bytes).eq_ignore_ascii_case(expected) {
+            return Err(format!(
+                "Контрольная сумма authlib-injector {} не совпала",
+                release.version
+            ));
+        }
+    }
+    Ok(Some((release.version, bytes)))
+}
+
+async fn fetch_authlib_injector_update(
+    client: &Client,
+    installed: Option<&str>,
+) -> Result<Option<(String, Vec<u8>)>, String> {
+    let mut mirror_err = String::from("no authlib-injector mirrors tried");
+    for meta_url in AUTHLIB_INJECTOR_META_URLS {
+        let attempt = match release_from_meta(client, meta_url).await {
+            Ok(release) => fetch_release(client, release, installed).await,
+            Err(e) => Err(e),
+        };
+        match attempt {
+            Ok(update) => return Ok(update),
+            Err(e) => mirror_err = e,
+        }
+    }
+    let attempt = match release_from_github(client).await {
+        Ok(release) => fetch_release(client, release, installed).await,
+        Err(e) => Err(e),
+    };
+    attempt.map_err(|gh_err| {
+        format!("Не удалось скачать authlib-injector (зеркала: {mirror_err}; GitHub: {gh_err})")
+    })
+}
+
+static OAUTH_STATE: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+
+fn gen_random_str(len: usize) -> String {
+    rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
+}
+
+async fn handle_resp<T>(resp: reqwest::Response, err_ctx: &str) -> Result<T, String>
+where T: for<'de> Deserialize<'de> {
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_else(|_| "<no body>".into());
+        return Err(format!("{err_ctx}: {} — {}", status, text));
+    }
+    resp.json::<T>().await.map_err(|e| format!("Ошибка парсинга {err_ctx}: {e}"))
+}
+
+
+#[derive(Debug, Deserialize)]
+pub struct OAuth2TokenResponse {
+    pub access_token: String,
+    #[serde(default)] pub refresh_token: Option<String>,
+    pub token_type: String, pub expires_in: u64,
+}
+#[derive(Debug, Deserialize)]
+pub struct AccountInfo {
+    pub id: u64, pub uuid: String, pub username: String,
+    #[serde(default)] pub email: Option<String>,
+    #[serde(default)] pub preferredLanguage: Option<String>,
+}
+#[derive(Debug, Serialize)]
+struct YggdrasilAuthRequest<'a> {
+    username: &'a str, password: &'a str,
+    #[serde(rename = "clientToken")] client_token: &'a str,
+    #[serde(rename = "requestUser")] request_user: bool,
+}
+#[derive(Debug, Deserialize)]
+pub struct YggdrasilProfile { pub id: String, pub name: String }
+#[derive(Debug, Deserialize)]
+pub struct YggdrasilUserProperty { pub name: String, pub value: String }
+#[derive(Debug, Deserialize)]
+pub struct YggdrasilUser {
+    pub id: String, pub username: String,
+    #[serde(default)] pub properties: Vec<YggdrasilUserProperty>,
+}
+#[derive(Debug, Deserialize)]
+pub struct YggdrasilAuthResponse {
+    #[serde(rename = "accessToken")] pub access_token: String,
+    #[serde(rename = "clientToken")] pub client_token: String,
+    #[serde(default)] pub availableProfiles: Vec<YggdrasilProfile>,
+    #[serde(rename = "selectedProfile")] pub selected_profile: YggdrasilProfile,
+    #[serde(default)] pub user: Option<YggdrasilUser>,
+}
+#[derive(Debug, Deserialize)]
+struct YggdrasilError { error: String, #[serde(rename = "errorMessage")] error_message: String }
+#[derive(Debug, Serialize)]
+struct YggdrasilValidateRequest<'a> { #[serde(rename = "accessToken")] access_token: &'a str }
+#[derive(Debug, Serialize)]
+struct YggdrasilInvalidateRequest<'a> {
+    #[serde(rename = "accessToken")] access_token: &'a str,
+    #[serde(rename = "clientToken")] client_token: &'a str,
+}
+
+
+pub fn generate_oauth2_url(state: &str) -> String {
+    let scopes = "minecraft_server_session account_info offline_access";
+    format!(
+        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}",
+        OAUTH2_AUTH_URL,
+        urlencoding::encode(ELY_CLIENT_ID),
+        urlencoding::encode(REDIRECT_URI),
+        urlencoding::encode(scopes),
+        urlencoding::encode(state)
+    )
+}
+
+async fn oauth2_token_request(grant_type: &str, code: Option<&str>, refresh: Option<&str>) -> Result<OAuth2TokenResponse, String> {
+    let url = crate::infra::api_base::ely_oauth_token_url();
+    let mut body = serde_json::json!({
+        "grant_type": grant_type,
+        "redirect_uri": REDIRECT_URI,
+    });
+    if let Some(code) = code {
+        body["code"] = serde_json::Value::String(code.to_string());
+    }
+    if let Some(refresh) = refresh {
+        body["refresh_token"] = serde_json::Value::String(refresh.to_string());
+    }
+
+    let resp = http_client()
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    handle_resp(resp, "Ely.by OAuth2 token").await
+}
+
+pub async fn exchange_code_for_token(code: String) -> Result<OAuth2TokenResponse, String> {
+    oauth2_token_request("authorization_code", Some(&code), None).await
+}
+
+pub async fn refresh_oauth2_token(refresh_token: &str) -> Result<OAuth2TokenResponse, String> {
+    oauth2_token_request("refresh_token", None, Some(refresh_token)).await
+}
+
+pub async fn fetch_account_info(access_token: &str) -> Result<AccountInfo, String> {
+    let resp = http_client()
+        .get("https://account.ely.by/api/account/v1/info")
+        .bearer_auth(access_token)
+        .send().await.map_err(|e| e.to_string())?;
+    handle_resp(resp, "Ely.by account info").await
+}
+
+pub async fn yggdrasil_authenticate(username: &str, password: &str, client_token: &str) -> Result<YggdrasilAuthResponse, String> {
+    let resp = http_client()
+        .post(YGGDRASIL_AUTH_URL)
+        .json(&YggdrasilAuthRequest { username, password, client_token, request_user: true })
+        .send().await.map_err(|e| e.to_string())?;
+
+    if resp.status().is_success() {
+        return handle_resp(resp, "Ely.by authenticate").await;
+    }
+
+    let status = resp.status(); 
+    let text = resp.text().await.unwrap_or_else(|_| "<no body>".into());
+    
+    if let Ok(err) = serde_json::from_str::<YggdrasilError>(&text) {
+        if err.error == "ForbiddenOperationException" && err.error_message.contains("two factor") {
+            return Err("ELYBY_2FA_REQUIRED".into());
+        }
+        return Err(format!("Ошибка Ely.by: {} — {}", err.error, err.error_message));
+    }
+    Err(format!("Ely.by authenticate error {}: {}", status, text))
+}
+
+pub async fn yggdrasil_validate(access_token: &str) -> Result<bool, String> {
+    let resp = http_client()
+        .post(YGGDRASIL_VALIDATE_URL)
+        .json(&YggdrasilValidateRequest { access_token })
+        .send().await.map_err(|e| e.to_string())?;
+    
+    if resp.status().is_success() { return Ok(true); }
+    let status = resp.status(); 
+    let text = resp.text().await.unwrap_or_else(|_| "<no body>".into());
+    
+    if status.as_u16() == 400 || status.as_u16() == 401 { return Ok(false); }
+    Err(format!("Ely.by validate error {}: {}", status, text))
+}
+
+pub async fn yggdrasil_invalidate(access_token: &str, client_token: &str) -> Result<(), String> {
+    let resp = http_client()
+        .post(YGGDRASIL_INVALIDATE_URL)
+        .json(&YggdrasilInvalidateRequest { access_token, client_token })
+        .send().await.map_err(|e| e.to_string())?;
+    
+    if resp.status().is_success() { return Ok(()); }
+    let status = resp.status(); 
+    let text = resp.text().await.unwrap_or_else(|_| "<no body>".into());
+    Err(format!("Ely.by invalidate error {}: {}", status, text))
+}
+
+fn store_oauth_state(state: String) {
+    if let Ok(mut g) = OAUTH_STATE.lock() { *g = Some(state); }
+}
+fn take_oauth_state() -> Option<String> {
+    OAUTH_STATE.lock().ok().and_then(|mut g| g.take())
+}
+
+pub async fn ensure_authlib_injector() -> Result<std::path::PathBuf, String> {
+    let base = launcher_data_dir()?;
+    let dir = base.join("authlib");
+    let jar_path = dir.join("authlib-injector.jar");
+    let version_path = dir.join("authlib-injector.version");
+
+    let has_jar = std::fs::File::open(&jar_path)
+        .and_then(|mut f| { let mut sig = [0u8; 2]; f.read_exact(&mut sig)?; Ok(sig == *b"PK") })
+        .unwrap_or(false);
+    if !has_jar && jar_path.exists() {
+        let _ = std::fs::remove_file(&jar_path);
+    }
+    let installed = has_jar
+        .then(|| std::fs::read_to_string(&version_path).ok())
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let checked_recently = installed.is_some()
+        && std::fs::metadata(&version_path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age < AUTHLIB_INJECTOR_UPDATE_INTERVAL);
+    if has_jar && (AUTHLIB_INJECTOR_CHECKED.load(Ordering::Relaxed) || checked_recently) {
+        return Ok(jar_path);
+    }
+
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let client = if has_jar {
+        Client::builder()
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(5))
+            .user_agent("16Launcher/1.0")
+            .build()
+            .unwrap_or_else(|_| http_client())
+    } else {
+        http_client()
+    };
+    match fetch_authlib_injector_update(&client, installed.as_deref()).await {
+        Ok(None) => {
+            if let Some(version) = &installed {
+                let _ = std::fs::write(&version_path, version);
+            }
+        }
+        Ok(Some((version, bytes))) => match write_atomic(&jar_path, &bytes) {
+            Ok(()) => {
+                let _ = std::fs::write(&version_path, &version);
+                eprintln!("[ElyAuth] authlib-injector обновлён до {version}");
+            }
+
+            Err(e) if has_jar => {
+                eprintln!("[ElyAuth] Не удалось заменить authlib-injector, остаётся прежняя версия: {e}");
+            }
+            Err(e) => return Err(e),
+        },
+        Err(e) if has_jar => {
+            eprintln!("[ElyAuth] Не удалось проверить обновление authlib-injector: {e}");
+        }
+        Err(e) => return Err(e),
+    }
+    AUTHLIB_INJECTOR_CHECKED.store(true, Ordering::Relaxed);
+    Ok(jar_path)
+}
+
+
+async fn handle_oauth_callback_internal(app: &AppHandle, code: String, state: String) -> Result<(), String> {
+    let saved = take_oauth_state().ok_or("OAuth2 state не найден")?;
+    if saved != state { return Err("Некорректный state".into()); }
+
+    let token = exchange_code_for_token(code).await?;
+    let account = fetch_account_info(&token.access_token).await?;
+
+    let mut profile = get_profile().unwrap_or_default();
+    profile.ely_username = Some(account.username.clone());
+    profile.ely_uuid = Some(account.uuid.replace('-', ""));
+    profile.ely_access_token = Some(token.access_token);
+    profile.ely_refresh_token = token.refresh_token;
+    profile.ely_client_token.get_or_insert_with(|| gen_random_str(32));
+    
+    profile.ms_access_token = None; profile.ms_refresh_token = None; profile.ms_id_token = None;
+    profile.mc_uuid = None; profile.mc_username = None; profile.mc_access_token = None;
+
+    save_full_profile(&profile).map_err(|e| e.to_string())?;
+    let _ = app.emit("ely-login-complete", profile);
+    Ok(())
+}
+
+fn parse_query_param(query: &str, key: &str) -> Option<String> {
+    query.split('&').find_map(|pair| {
+        let mut split = pair.splitn(2, '=');
+        if let (Some(k), Some(v)) = (split.next(), split.next()) {
+            if k == key { return Some(urlencoding::decode(v).ok()?.into_owned()); }
+        }
+        None
+    })
+}
+
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c { '<' => out.push_str("&lt;"), '>' => out.push_str("&gt;"), '&' => out.push_str("&amp;"), '"' => out.push_str("&quot;"), _ => out.push(c) }
+    }
+    out
+}
+
+async fn write_html(stream: &mut tokio::net::TcpStream, title: &str, body: &str) {
+    let page = format!("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{}</title></head><body>{}</body></html>", html_escape(title), body);
+    let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}", page.len(), page);
+    let _ = stream.write_all(resp.as_bytes()).await;
+}
+
+async fn try_process_oauth_connection(app: &AppHandle, mut stream: tokio::net::TcpStream) -> Result<bool, String> {
+    let mut buf = vec![0u8; 8192];
+    let n = stream.read(&mut buf).await.map_err(|e| e.to_string())?;
+    if n == 0 { return Ok(false); }
+
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let first_line = req.lines().next().ok_or("Bad Request")?;
+    
+    if !first_line.starts_with("GET ") { 
+        let _ = stream.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n").await;
+        return Ok(false);
+    }
+
+    let path_part = first_line.strip_prefix("GET ").and_then(|s| s.split(' ').next()).ok_or("Bad Path")?;
+    let query = path_part.split('?').nth(1).ok_or("No Query")?;
+
+    if let Some(err) = parse_query_param(query, "error") {
+        let desc = parse_query_param(query, "error_description").unwrap_or_default();
+        let msg = format!("Ely.by: {err} — {desc}");
+        let _ = app.emit("ely-login-failed", msg.clone());
+        write_html(&mut stream, "Ошибка", &format!("<h3>Ошибка</h3><p>{}</p>", html_escape(&msg))).await;
+        return Ok(true);
+    }
+
+    let code = parse_query_param(query, "code").ok_or("No code")?;
+    let state = parse_query_param(query, "state").ok_or("No state")?;
+
+    match handle_oauth_callback_internal(app, code, state).await {
+        Ok(_) => write_html(&mut stream, "Готово", "<h3>Авторизация завершена.</h3><p>Можно закрыть эту вкладку и вернуться в лаунчер.</p>").await,
+        Err(e) => {
+            eprintln!("[ElyAuth] Callback error: {e}");
+            let _ = app.emit("ely-login-failed", e.clone());
+            write_html(&mut stream, "Ошибка", &format!("<h3>Ошибка входа</h3><p>{}</p>", html_escape(&e))).await;
+        }
+    }
+    Ok(true)
+}
+
+async fn run_local_oauth_server_async(app: AppHandle) {
+    let l4 = match TcpListener::bind("127.0.0.1:25568").await {
+        Ok(l) => l,
+        Err(e) => {
+            let msg = format!("Порт 25568 занят: {e}");
+            eprintln!("[ElyAuth] {msg}");
+            let _ = app.emit("ely-login-failed", msg);
+            return;
+        }
+    };
+    let l6 = TcpListener::bind("[::1]:25568").await.ok();
+    let max_wait = Duration::from_secs(600);
+    let start = tokio::time::Instant::now();
+
+    loop {
+        if start.elapsed() >= max_wait {
+            let _ = app.emit("ely-login-failed", "Время ожидания истекло.");
+            return;
+        }
+        let remaining = max_wait - start.elapsed();
+        
+        let accept_fut = async {
+            match &l6 {
+                Some(l6) => tokio::select! { r = l4.accept() => r, r = l6.accept() => r },
+                None => l4.accept().await,
+            }
+        };
+
+        match tokio::time::timeout(remaining, accept_fut).await {
+            Err(_) => { let _ = app.emit("ely-login-failed", "Таймаут"); return; }
+            Ok(Err(e)) => { eprintln!("[ElyAuth] Accept: {e}"); continue; }
+            Ok(Ok((stream, _))) => {
+                if let Err(e) = try_process_oauth_connection(&app, stream).await {
+                    eprintln!("[ElyAuth] Process: {e}");
+                } else { return; }
+            }
+        }
+    }
+}
+
+fn run_local_oauth_server(app: AppHandle) {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(run_local_oauth_server_async(app));
+    });
+}
+
+#[tauri::command]
+pub async fn start_ely_oauth(app: AppHandle) -> Result<String, String> {
+    let state = gen_random_str(32);
+    store_oauth_state(state.clone());
+    let app_clone = app.clone();
+    run_local_oauth_server(app_clone);
+    Ok(generate_oauth2_url(&state))
+}
+
+#[tauri::command]
+pub async fn ely_login_with_password(username: String, password: String, totp_token: Option<String>) -> Result<(), String> {
+    let mut profile = get_profile().unwrap_or_default();
+    let pwd = if let Some(t) = totp_token { if !t.is_empty() { format!("{password}:{t}") } else { password } } else { password };
+    let client_token = profile.ely_client_token.clone().unwrap_or_else(|| gen_random_str(32));
+    
+    let resp = yggdrasil_authenticate(&username, &pwd, &client_token).await?;
+
+    profile.ely_username = Some(resp.selected_profile.name.clone());
+    profile.ely_uuid = Some(resp.selected_profile.id.clone());
+    profile.ely_access_token = Some(resp.access_token);
+    profile.ely_client_token = Some(resp.client_token);
+    profile.ms_access_token = None; profile.ms_refresh_token = None; profile.ms_id_token = None;
+    profile.mc_uuid = None; profile.mc_username = None; profile.mc_access_token = None;
+
+    save_full_profile(&profile).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ely_logout() -> Result<(), String> {
+    let mut profile = get_profile().unwrap_or_default();
+    if let (Some(acc), Some(cli)) = (profile.ely_access_token.clone(), profile.ely_client_token.clone()) {
+        let _ = yggdrasil_invalidate(&acc, &cli).await;
+    }
+    profile.ely_username = None; profile.ely_uuid = None;
+    profile.ely_access_token = None; profile.ely_client_token = None; profile.ely_refresh_token = None;
+    save_full_profile(&profile).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub async fn refresh_ely_session_internal() -> Result<(), String> {
+    let mut profile = get_profile().unwrap_or_default();
+    let access = profile.ely_access_token.clone().filter(|t| !t.is_empty());
+    if access.is_none() { return Ok(()); }
+    
+    if yggdrasil_validate(&access.unwrap()).await? { return Ok(()); }
+
+    let refresh = profile.ely_refresh_token.clone().filter(|t| !t.is_empty())
+        .ok_or_else(|| {
+            profile.ely_access_token = None;
+            let _ = save_full_profile(&profile);
+            "Сессия истекла, войдите заново."
+        })?;
+
+    let token_resp = refresh_oauth2_token(&refresh).await?;
+    profile.ely_access_token = Some(token_resp.access_token);
+    if let Some(new_ref) = token_resp.refresh_token { profile.ely_refresh_token = Some(new_ref); }
+    
+    save_full_profile(&profile).map_err(|e| e.to_string())?;
+    Ok(())
+}

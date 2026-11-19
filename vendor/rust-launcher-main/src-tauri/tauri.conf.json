@@ -1,0 +1,91 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "16Launcher",
+  "version": "3.3.7",
+  "identifier": "com.16steyy.16Launcher",
+
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+
+  "app": {
+    "windows": [
+      {
+        "title": "16Launcher",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "decorations": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://api.16-launcher.ru wss://api.16-launcher.ru https://api.modrinth.com https://account.ely.by https://authserver.ely.by https://skinsystem.ely.by https://vzge.me https://raw.githubusercontent.com https://cdn.jsdelivr.net https://forgemvn.lumintomc.ru https://github.com http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; img-src 'self' https: asset: http://asset.localhost data: blob:; media-src 'self' https: asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' asset: http://asset.localhost data:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "requireLiteralLeadingDot": false,
+          "allow": ["$APPDATA/16Launcher/**", "$DATA/16Launcher/**"]
+        }
+      }
+    }
+  },
+
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb", "rpm", "nsis", "dmg"],
+    "fileAssociations": [
+      {
+        "ext": ["mrpack"],
+        "name": "Modrinth Modpack",
+        "description": "Modrinth modpack (.mrpack)",
+        "mimeType": "application/octet-stream"
+      }
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      },
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "webkit2gtk4.1",
+          "gtk3",
+          "libayatana-appindicator"
+        ]
+      }
+    },
+    "macOS": {
+      "entitlements": "./Entitlements.plist",
+      "minimumSystemVersion": "11.0"
+    }
+  },
+
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwNzkxNTE1RDY5MzNFRDMKUldUVFBwUFdGUlY1b04yR0RvNG5FUDNpTW9nOWgzVEJsMGZiUnlPT1Y3TTNVa0NGSGp0bWUzclMK",
+      "endpoints": [
+        "https://github.com/launcherdev11/rust-launcher/releases/latest/download/latest.json",
+        "https://api.16-launcher.ru/releases/latest.json"
+      ]
+    }
+  }
+}

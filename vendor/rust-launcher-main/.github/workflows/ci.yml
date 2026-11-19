@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 16account
+  pull_request:
+    branches:
+      - 16account
+
+jobs:
+  frontend-and-backend-build:
+    name: Build frontend & Rust backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libglib2.0-dev \
+            pkg-config
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Build Vite frontend
+        run: npm run build
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check Rust code compiles
+        working-directory: src-tauri
+        run: cargo check --locked
+
+      - name: Lint Rust code (clippy)
+        working-directory: src-tauri
+        run: cargo clippy --locked
+
+  backend-api-tests:
+    name: Backend API tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: launcher
+          POSTGRES_PASSWORD: launcher
+          POSTGRES_DB: launcher_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U launcher -d launcher_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry (backend)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: ${{ runner.os }}-backend-cargo-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-backend-cargo-
+
+      - name: Run backend unit + integration tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://launcher:launcher@127.0.0.1:5432/launcher_test
+          TEST_DATABASE_URL: postgres://launcher:launcher@127.0.0.1:5432/launcher_test
+          REDIS_URL: redis://127.0.0.1:6379
+          TEST_REDIS_URL: redis://127.0.0.1:6379
+          JWT_SECRET: ci-test-jwt-secret
+        run: cargo test --locked
+

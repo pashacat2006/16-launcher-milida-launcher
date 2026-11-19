@@ -1,0 +1,3361 @@
+{
+  "common": {
+    "undo": "Undo",
+    "holdToDelete": "Hold to delete",
+    "state": {
+      "tabCrashed": "This tab has crashed",
+      "tabCrashedHint": "The rest of the launcher is fine. Reload the tab; your saved data is safe.",
+      "reloadTab": "Reload tab",
+      "copyDetails": "Copy details",
+      "copied": "Copied",
+      "retry": "Retry",
+      "loadFailed": "Couldn't load data",
+      "loadFailedHint": "Check your internet connection and try again.",
+      "offlineTitle": "No internet connection",
+      "offlineHint": "Online features are unavailable while you're offline. Playing locally works as usual.",
+      "platformDownTitle": "16Launcher server is unavailable",
+      "platformDownHint": "Couldn't reach the server. Local features still work, please try again later.",
+      "online": "Connection restored",
+      "unsavedTitle": "You have unsaved changes",
+      "unsavedConfirm": "Close without saving? Your changes will be lost.",
+      "discard": "Close without saving",
+      "keepEditing": "Keep editing"
+    },
+    "confirmDialog": {
+      "title": "Please confirm",
+      "confirm": "Confirm"
+    },
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "change": "Change",
+    "save": "Save",
+    "loading": "Loading…",
+    "working": "Please wait…",
+    "sending": "Sending…",
+    "goToAccounts": "Go to Accounts",
+    "search": "Search…",
+    "yes": "Yes",
+    "no": "No",
+    "close": "Close",
+    "clear": "Clear",
+    "add": "Add",
+    "rename": "Rename",
+    "browse": "Browse",
+    "sponsor": "Sponsor",
+    "format": {
+      "modsCount": "Mods: {{count}}",
+      "playtimeHoursMinutes": "{{h}}h {{m}}m",
+      "playtimeMinutes": "{{m}}m",
+      "playtimeDays": "{{d}}d",
+      "playtimeHours": "{{h}}h",
+      "playtimeMinutesLong": "{{m}}m",
+      "playtimeSeconds": "{{s}}s",
+      "playtimeZero": "0s",
+      "archiveLabel": "Archive: {{date}}",
+      "modsMeta": "{{count}} mods"
+    }
+  },
+  "mods": {
+    "empty": {
+      "lockedHint": "Filters are locked to the instance: {{filters}}",
+      "searchHint": "Check the spelling of “{{query}}” or search on the other platform",
+      "showAll": "Show not only installed",
+      "resetFilters": "Reset categories and environment",
+      "unlock": "Search without the instance lock",
+      "anyVersion": "Any game version",
+      "anyLoader": "Any loader",
+      "tryProvider": "Search on {{provider}}"
+    },
+    "provider": {
+      "modrinth": "Modrinth",
+      "curseforge": "CurseForge"
+    },
+    "unlockTitle": "Version is fixed by the profile",
+    "unlockConfirm": "Change version and loader? Content you install may be incompatible with the profile.",
+    "lockedHintTitle": "Fixed by the profile",
+    "lockedHintBody": "Minecraft {{version}} · {{loader}}. Mods are matched to it.",
+    "unlockedBanner": "You're browsing content that doesn't match the selected profile. Installed mods may not launch.",
+    "relock": "Match profile again",
+    "searchPlaceholder": "Search...",
+    "version": "Version",
+    "loaderAny": "Any",
+    "loaderAll": "All",
+    "tab": {
+      "mods": "Mods",
+      "resources": "Resources",
+      "shaders": "Shaders",
+      "modpacks": "Modpacks"
+    },
+    "layout": {
+      "list": "List",
+      "grid": "Grid"
+    },
+    "loadingPopular": "Loading popular projects…",
+    "nothingFound": "Nothing found for the selected filters.",
+    "nothingFoundModrinth": "Nothing found for the selected Modrinth filters.",
+    "nothingFoundCurseforge": "Nothing found for the selected CurseForge filters.",
+    "pageOf": "Page {{current}} of {{total}}",
+    "prev": "Prev",
+    "next": "Next",
+    "selectProject": "Select a project on the left to see versions",
+    "backToList": "Back to list",
+    "openOnModrinth": "Open on Modrinth",
+    "openOnCurseforge": "Open on CurseForge",
+    "versionsLoading": "Loading versions…",
+    "installed": "installed",
+    "download": "Download",
+    "noAvailableVersions": "There are no available versions for this project.",
+    "gameVersionRequired": "Pick a Minecraft version in the filter: without it, compatible mod dependencies can't be resolved.",
+    "modpackImportSuccess": "Modpack “{{name}}” imported successfully.",
+    "modpackImport": {
+      "title": "Installing modpack…",
+      "start": "Preparing…",
+      "overrides": "Extracting…",
+      "files": "Downloading files…",
+      "done": "Done",
+      "cancelled": "Modpack installation cancelled."
+    },
+    "noIcon": "No icon",
+    "saveSuccessProfile": "File {{filename}} saved to profile.",
+    "saveSuccessWithDeps": "File {{filename}} and {{count}} dependencies saved to profile.",
+    "saveSuccessWithDepsSkipped": "Saved {{downloaded}} file(s), skipped {{skipped}} (already in profile, matching SHA1).",
+    "alreadyInstalled": "{{filename}} and all dependencies are already installed in the profile.",
+    "saveSuccessFolder": "File {{filename}} saved to {{folder}} folder.",
+    "downloadFailed": "Failed to download file.",
+    "downloadFailedModrinth": "Failed to download Modrinth file.",
+    "downloadFailedCurseforge": "Failed to download CurseForge file.",
+    "curseforgeModpackHint": "CurseForge modpack saved as an archive. Automatic .mrpack import is only available for Modrinth.",
+    "quickInstall": "Install",
+    "installing": "Installing…",
+    "batch": {
+      "hint": "Check projects, Ctrl+click them or Ctrl+drag a box around them, then download them as a batch.",
+      "selectOne": "Select {{title}}",
+      "selected": "Selected: {{count}}",
+      "clear": "Clear selection",
+      "download": "Download {{count}}",
+      "installing": "Downloading batch…",
+      "success": "Installed {{count}} project(s).",
+      "partial": "Installed {{ok}}, failed: {{failed}}.",
+      "failed": "Failed to download the selected projects.",
+      "modpackHint": "Batch download works for mods, resource packs, and shaders — not modpacks.",
+      "showList": "Show selected",
+      "removeOne": "Remove {{title}}"
+    },
+    "source": {
+      "catalog": "Catalog",
+      "favorites": "Favorites",
+      "recent": "Recent"
+    },
+    "sort": {
+      "relevance": "Relevance",
+      "downloads": "Downloads",
+      "popularity": "Popularity",
+      "updated": "Updated",
+      "newest": "Newest"
+    },
+    "filters": {
+      "title": "Filters",
+      "sort": "Sort",
+      "categories": "Categories",
+      "client": "Client",
+      "server": "Server",
+      "installedOnly": "Installed only",
+      "reset": "Reset"
+    },
+    "environment": {
+      "any": "Any",
+      "required": "Required",
+      "optional": "Optional",
+      "unsupported": "Unsupported"
+    },
+    "favorites": {
+      "add": "Favorite",
+      "remove": "Unfavorite",
+      "empty": "No favorites yet."
+    },
+    "recent": {
+      "empty": "No recently viewed projects yet.",
+      "clear": "Clear"
+    },
+    "detail": {
+      "loading": "Loading project page…",
+      "loadFailed": "Failed to load project page.",
+      "gallery": "Gallery",
+      "description": "Description",
+      "versions": "Versions",
+      "wiki": "Wiki",
+      "issues": "Issues",
+      "source": "Source",
+      "discord": "Discord",
+      "prevImage": "Previous image",
+      "nextImage": "Next image",
+      "showAll": "Full gallery ({{count}})",
+      "details": "Details",
+      "links": "Links",
+      "type": "Type",
+      "author": "Author",
+      "categories": "Categories",
+      "downloads": "Downloads",
+      "followers": "Followers",
+      "scrollTop": "Back to top"
+    },
+    "pageLabel": "Page",
+    "pageOfTotal": "of {{total}}",
+    "pageInputLabel": "Page number",
+    "byAuthor": "by {{author}}",
+    "channel": {
+      "all": "All",
+      "release": "Release",
+      "beta": "Beta",
+      "alpha": "Alpha"
+    },
+    "projectType": {
+      "mod": "Mod",
+      "modpack": "Modpack",
+      "resourcepack": "Resource pack",
+      "shader": "Shader",
+      "datapack": "Data pack",
+      "plugin": "Plugin"
+    }
+  },
+  "settings": {
+    "common": {
+      "yes": "Yes",
+      "no": "No",
+      "reset": "Reset",
+      "imagesFilterName": "Images",
+      "toggle": {
+        "on": "On",
+        "off": "Off"
+      }
+    },
+    "search": {
+      "placeholder": "Search settings…",
+      "noResults": "No settings found."
+    },
+    "tab": {
+      "directories": "Directories",
+      "game": "Game",
+      "versions": "Versions",
+      "launcher": "Launcher",
+      "updates": "Updates"
+    },
+    "card": {
+      "directories": "Directories",
+      "game": "Game",
+      "versions": "Minecraft versions",
+      "launcher": "Launcher",
+      "updates": "Launcher updates",
+      "interfaceLanguage": "Interface language",
+      "customization": "Customization"
+    },
+    "section": {
+      "display": "Window and graphics",
+      "java": "Java and memory",
+      "versionList": "List options",
+      "behavior": "Behavior",
+      "interface": "Interface",
+      "appearance": "Appearance",
+      "themes": "Themes",
+      "data": "Data"
+    },
+    "directories": {
+      "comingSoon": "Directory settings will be added later."
+    },
+    "game": {
+      "subtab": {
+        "general": "General",
+        "java": "Java"
+      },
+      "showConsoleOnLaunch": {
+        "label": "Show console on game start:"
+      },
+      "graphicsAdapter": {
+        "label": "Graphics card for the game:",
+        "auto": "Automatic",
+        "hint": "Windows applies this as a power-saving or high-performance preference for Java; the exact GPU may depend on driver settings."
+      },
+      "closeLauncherOnStart": {
+        "label": "Close launcher when game starts:"
+      },
+      "launchPreflight": {
+        "label": "Check the instance before launch:",
+        "hint": "Warns about low disk space and memory, an unsuitable Java and mod conflicts."
+      },
+      "checkGameProcesses": {
+        "label": "Check running game processes:"
+      },
+      "gameDirectory": {
+        "label": "Game directory:",
+        "choose": "Choose",
+        "defaultPathHint": "Default (launcher data folder)",
+        "hint": "Versions, libraries, modpacks, worlds, and mods are stored here. Changing the folder copies your data automatically."
+      },
+      "windowSize": {
+        "label": "Window size on launch:",
+        "widthPlaceholder": "Width",
+        "heightPlaceholder": "Height"
+      },
+      "ram": {
+        "label": "Memory (RAM):",
+        "mbUnit": "MB",
+        "editInMbHint": "Click to edit in MB",
+        "gbValue": "{{gb}}GB"
+      }
+    },
+    "versions": {
+      "showSnapshots": { "label": "Show snapshot versions:" },
+      "showAlpha": { "label": "Show Alpha versions:" },
+      "loaderFilter": { "label": "Loader:" },
+      "versionFilter": {
+        "label": "Version filter:",
+        "placeholder": "Type a version...",
+        "all": "All versions",
+        "noneFound": "Nothing found."
+      },
+      "loader": {
+        "vanilla": "Vanilla",
+        "fabric": "Fabric",
+        "quilt": "Quilt",
+        "forge": "Forge",
+        "neoforge": "NeoForge"
+      },
+      "forgeProxyFallback": { "label": "Use proxy fallback:" },
+      "available": { "label": "Available versions:" },
+      "refresh": "Refresh",
+      "loading": "Loading versions list...",
+      "noneFound": "No versions found. Check your internet connection.",
+      "installedBadge": "Installed",
+      "installLog": "Install log for {{version}}",
+      "action": {
+        "install": "Install",
+        "reinstall": "Reinstall",
+        "installing": "Installing...",
+        "delete": "Delete",
+        "deleting": "Deleting..."
+      },
+      "manage": {
+        "reinstallTitle": "Reinstall {{version}}",
+        "reinstallHint": "Pick a loader version. Base Minecraft version: {{gameVersion}}.",
+        "reinstallConfirm": "Reinstall",
+        "loaderVersionLabel": "Loader version:",
+        "loaderRequired": "Select a loader version."
+      },
+      "delete": {
+        "title": "Delete {{version}}?",
+        "simplePrompt": "Remove Minecraft {{version}} files? Shared libraries folder is not affected.",
+        "choicePrompt": "What should be removed for {{version}}?",
+        "gameOnly": "Minecraft {{gameVersion}} only",
+        "loaderOnly": "Loader only{{loaderSuffix}}",
+        "all": "Everything",
+        "success": "Removed: {{target}}.",
+        "failed": "Could not delete: {{msg}}"
+      },
+      "loadFailed": "Failed to load Minecraft versions list.",
+      "refreshFailed": "Failed to refresh versions list.",
+      "installSuccess": "Version {{version}} installed successfully.",
+      "installFailed": "Failed to install version {{version}}.",
+      "custom": {
+        "importButton": "Import custom version",
+        "importJarPrompt": "Select client.jar for this version? (you can skip - the launcher will download it on install)",
+        "importSuccess": "Custom version {{version}} imported. Click Install to download libraries.",
+        "importFailed": "Failed to import version: {{msg}}"
+      },
+      "verify": {
+        "button": "Check files",
+        "checking": "Checking...",
+        "ok": "Files for version {{version}} are intact.",
+        "failed": "Failed to verify files for version {{version}}.",
+        "notSupported": "File verification is not supported for this loader.",
+        "promptText": "Issues were found in version {{version}}: missing {{missing}}, corrupted {{corrupted}} (checked {{checked}}). Overwrite files to restore proper operation?",
+        "rewriteButton": "Overwrite",
+        "rewritten": "Files for version {{version}} were overwritten.",
+        "skipPrompt": "Do not show this warning again"
+      }
+    },
+    "launcher": {
+      "openOnProfilesTab": {
+        "label": "Default tab:",
+        "yes": "Modpacks",
+        "no": "Main"
+      },
+      "uiSounds": { "label": "Interface sounds:" },
+      "notificationsAutoClear": {
+        "label": "Auto-clear notifications:",
+        "hint": "Applies only to the launcher's system notifications under the bell. Platform notifications are left alone.",
+        "option": {
+          "off": "Never",
+          "read": "After viewing",
+          "10m": "After 10 minutes",
+          "30m": "After 30 minutes",
+          "60m": "After an hour"
+        }
+      },
+      "discordRpc": {
+        "label": "Show Discord activity:",
+        "hint": "Displays your launcher status in Discord (Rich Presence)."
+      },
+      "minimizeToTray": { "label": "Minimize to tray on close:" },
+      "autostart": { "label": "Launch at system startup:" },
+      "splitView": {
+        "label": "Dual-pane tab mode:",
+        "hint": "Drag a tab (Play, Mods, Modpacks, Settings) to a window edge to open a second pane."
+      },
+      "disableAnimations": { "label": "Disable animations:" },
+      "backgroundAnimation": {
+        "label": "Animated background:",
+        "hint": "Slow movement of the coloured glow behind the interface. Turn off if the launcher feels heavy on your GPU."
+      },
+      "disableThematicDecorations": {
+        "label": "Thematic design:",
+        "hint": ""
+      },
+      "notifyNewUpdate": { "label": "Notify about new launcher updates:" },
+      "notifyNewMessage": { "label": "Notify about new messages:" },
+      "notifySystemMessage": { "label": "Notify about system messages:" },
+      "interfaceLanguage": {
+        "label": "Interface language:",
+        "ru": "Russian",
+        "en": "English",
+        "de": "German",
+        "es": "Spanish"
+      },
+      "accentColor": {
+        "label": "Launcher accent color:",
+        "popupTitle": "Accent color",
+        "pickColorAria": "Pick color",
+        "currentLabel": "Current",
+        "svPadLabel": "Saturation & brightness",
+        "svPadAria": "Saturation and brightness for the current hue",
+        "helpText": "Ring: hue. Square: saturation and brightness. You can also type the HEX.",
+        "custom": "Custom color",
+        "presets": {
+          "white": "White",
+          "graphite": "Graphite",
+          "amethyst": "Amethyst",
+          "violet": "Violet",
+          "lavender": "Lavender",
+          "indigo": "Indigo",
+          "cobalt": "Cobalt",
+          "sky": "Sky",
+          "cyan": "Cyan",
+          "teal": "Teal",
+          "emerald": "Emerald",
+          "lime": "Lime",
+          "amber": "Amber",
+          "orange": "Orange",
+          "scarlet": "Scarlet",
+          "raspberry": "Raspberry",
+          "pink": "Pink",
+          "orchid": "Orchid"
+        }
+      },
+      "backgroundImage": {
+        "label": "Background image:",
+        "choose": "Choose image",
+        "hint": "PNG, JPG, WebP, and GIF are supported (animations are preserved). The file is copied to the launcher data folder. “Reset” restores the default background."
+      },
+      "adaptiveAccent": {
+        "label": "Match colors to background:",
+        "hint": "Interface colors are taken from the chosen background image. Without a custom image, the color you picked manually is used."
+      },
+      "backgroundBlur": {
+        "label": "Background blur:"
+      },
+      "customThemes": {
+        "label": "Custom theme:",
+        "default": "Default",
+        "loading": "Loading themes…",
+        "importZip": "Import ZIP",
+        "create": "Create theme",
+        "createPrompt": "Theme name",
+        "openFolder": "Open themes folder",
+        "editCss": "Open style.css",
+        "delete": "Delete theme",
+        "deleteConfirm": "Delete theme «{{name}}»?",
+        "zipFilterName": "Theme archive",
+        "byAuthor": "By {{author}}",
+        "imported": "Theme «{{name}}» imported.",
+        "importFailed": "Failed to import theme.",
+        "created": "Theme «{{name}}» created.",
+        "createFailed": "Failed to create theme.",
+        "deleted": "Theme «{{name}}» deleted.",
+        "deleteFailed": "Failed to delete theme.",
+        "openFolderFailed": "Failed to open themes folder.",
+        "editCssFailed": "Failed to open style.css.",
+        "refresh": "Refresh list",
+        "openEditor": "Theme editor",
+        "duplicate": "Duplicate",
+        "duplicatePrompt": "Name of the copy",
+        "duplicateTitle": "Copy theme",
+        "duplicateDefault": "{{name}} (copy)",
+        "duplicated": "Created copy «{{name}}».",
+        "duplicateFailed": "Failed to duplicate theme.",
+        "exportZip": "Export ZIP",
+        "exported": "Theme exported.",
+        "exportFailed": "Failed to export theme.",
+        "hotReload": {
+          "label": "Reload when files change:",
+          "hint": "The launcher watches the active theme folder and applies style.css, theme.json and image changes saved in an external editor right away."
+        }
+      },
+      "themeEditor": {
+        "title": "Theme editor",
+        "unsaved": "unsaved changes",
+        "switchSide": "Move the panel to the other side",
+        "close": "Close",
+        "loading": "Loading theme…",
+        "loadFailed": "Failed to load theme.",
+        "saved": "Theme saved.",
+        "saveFailed": "Failed to save theme.",
+        "discardConfirm": "Close the editor without saving changes?",
+        "assetFilter": "Images and fonts",
+        "assetFailed": "Failed to add the file to the theme.",
+        "tabs": {
+          "look": "Appearance",
+          "css": "CSS",
+          "info": "Details"
+        },
+        "lookHint": "Values are stored in theme.json → variables and applied before style.css. An empty field keeps the launcher default.",
+        "accentHint": "Without an accent here, the user's accent from settings is used. \"From\", \"to\" and \"light\" are derived from the main accent by default.",
+        "backgroundHint": "Applies when no custom background image is chosen in settings.",
+        "groups": {
+          "accent": "Accent",
+          "surfaces": "Surfaces and borders",
+          "text": "Text",
+          "radius": "Corners",
+          "font": "Font",
+          "background": "Background",
+          "custom": "Custom variables"
+        },
+        "vars": {
+          "accent-color": "Main accent",
+          "accent-from": "Gradient: from",
+          "accent-to": "Gradient: to",
+          "accent-hi": "Light accent",
+          "ink-0": "Window",
+          "ink-1": "Panels and cards",
+          "ink-2": "Inputs and buttons",
+          "ink-3": "Hover",
+          "ink-4": "Selected item",
+          "glass-bg": "Panel background",
+          "glass-bg-strong": "Dialog background",
+          "glass-bg-popover": "Menu background",
+          "seam": "Border",
+          "seam-strong": "Border (strong)",
+          "fg": "Main text",
+          "fg-muted": "Secondary text",
+          "fg-faint": "Captions",
+          "r-badge": "Badges",
+          "r-control": "Buttons and inputs",
+          "r-card": "Cards",
+          "r-panel": "Panels and dialogs",
+          "font-sans": "Interface font",
+          "launcher-bg-image": "Background image"
+        },
+        "customHint": "Any CSS variables; use them in style.css via var(--name).",
+        "removeVar": "Remove variable",
+        "badVarName": "A variable name must start with -- and contain only Latin letters, digits, - and _.",
+        "addVar": "Add",
+        "snippets": {
+          "placeholder": "Insert snippet…",
+          "panelBorder": "Accent border on panels",
+          "navActive": "Active menu item colour",
+          "glass": "Translucent blurred panels",
+          "background": "Background image",
+          "tabScope": "Styles for one tab only",
+          "font": "Custom font (@font-face)",
+          "hideGrain": "Remove background grain"
+        },
+        "insertAsset": "File",
+        "insertAssetHint": "Copy an image or font into the theme folder and insert url(...)",
+        "external": "External editor",
+        "externalHint": "Open style.css in the system editor",
+        "externalUnsaved": "Save first: the external editor opens the file from disk.",
+        "cssOk": "No structural errors found. Ctrl+S saves.",
+        "cssProblem": {
+          "unclosedBrace": "Line {{line}}: \"{\" block is not closed.",
+          "extraBrace": "Line {{line}}: unexpected \"}\".",
+          "unclosedComment": "Line {{line}}: /* comment is not closed.",
+          "unclosedString": "Line {{line}}: quote is not closed."
+        },
+        "info": {
+          "name": "Name",
+          "author": "Author",
+          "version": "Version",
+          "description": "Description",
+          "id": "ID (folder name)",
+          "previewHint": "Put preview.png (or .jpg/.webp) into the theme folder and it will show on the theme card. Recommended size 640×200.",
+          "openFolder": "Open theme folder"
+        },
+        "openFolderFailed": "Failed to open the theme folder.",
+        "livePreview": "Live preview",
+        "cancel": "Close",
+        "save": "Save",
+        "saving": "Saving…",
+        "auto": "auto",
+        "pickImage": "Choose image",
+        "resetVar": "Reset to default"
+      },
+      "cache": {
+        "label": "Launcher cache:",
+        "description": "Ely avatars and temporary downloads.",
+        "loading": "Calculating cache size…",
+        "sizeLabel": "Size: {{size}}",
+        "sizeUnknown": "Size unknown",
+        "bytes": "{{value}} B",
+        "kb": "{{value}} KB",
+        "mb": "{{value}} MB",
+        "gb": "{{value}} GB",
+        "clearButton": "Clear cache",
+        "cleared": "Launcher cache cleared.",
+        "clearFailed": "Failed to clear launcher cache."
+      },
+      "sidebarPosition": {
+        "label": "Sidebar position:",
+        "left": "Left",
+        "right": "Right",
+        "top": "Top",
+        "bottom": "Bottom"
+      },
+      "sidebarOrder": {
+        "label": "Sidebar buttons order:",
+        "moveUp": "Move up",
+        "moveDown": "Move down"
+      },
+      "resetSettings": {
+        "button": "Reset launcher settings to defaults",
+        "success": "Launcher settings have been reset to default values.",
+        "failed": "Failed to reset launcher settings.",
+        "confirm": "Reset all launcher settings? This cannot be undone.",
+        "hint": "Restores default values, the default background and tab order."
+      },
+      "backup": {
+        "title": "Import / export",
+        "hint": "Export saves launcher settings to a file. Import applies settings from a file and overwrites current ones.",
+        "exportButton": "Export settings",
+        "importButton": "Import settings",
+        "exporting": "Exporting…",
+        "importing": "Importing…",
+        "exportSuccess": "Settings exported.",
+        "exportFailed": "Failed to export settings.",
+        "importSuccess": "Settings imported.",
+        "importFailed": "Failed to import settings.",
+        "exportDialogTitle": "Export launcher settings",
+        "importDialogTitle": "Import launcher settings"
+      }
+    },
+    "updates": {
+      "idle": "Check whether a new version is available.",
+      "checkOnStart": { "label": "Check for updates on start:" },
+      "autoInstall": { "label": "Automatically install updates:" },
+      "checkNow": "Check for updates",
+      "checkNowHint": "Shift+click to force show the update popup",
+      "noneFound": "You're up to date. No new version available.",
+      "installedRestart": "Update installed. Please restart the launcher.",
+      "availableNextStart": "A new launcher version is available: {{version}}. Installation will be offered on the next start.",
+      "checkFailed": "Could not check for updates. You may already have the latest version.",
+      "checking": "Checking for updates...",
+      "downloading": "Downloading update... {{percent}}%",
+      "installing": "Installing update...",
+      "available": "New version {{version}} is available",
+      "released": "Update {{version}} is available",
+      "installNow": "Install now",
+      "upToDate": "Launcher is up to date",
+      "popup": {
+        "defaultTitle": "Update available",
+        "versionLabel": "Version {{version}}",
+        "viewChanges": "View changelog",
+        "update": "Update",
+        "updating": "Updating..."
+      }
+    }
+  },
+  "javaSettings": {
+    "loading": "Loading Java settings...",
+    "description": "Which Java and JVM args to use when launching. Without custom args, the launcher defaults apply.",
+    "runtime": {
+      "title": "Java runtime",
+      "hint": "By default the launcher downloads and uses Mojang Java for the selected Minecraft version.",
+      "auto": "Auto (Mojang runtime)",
+      "custom": "Custom Java path",
+      "profileHint": "These settings apply only to this modpack and override global settings.",
+      "manageHint": "Checks and reinstalls the Mojang Java runtimes used by the launcher."
+    },
+    "useCustomArgs": {
+      "label": "Use custom JVM arguments",
+      "hint": "When off, only launcher defaults are used."
+    },
+    "preferIpv6": {
+      "label": "Prefer IPv6",
+      "hint": "Java will try to connect to servers over IPv6 (useful on CGNAT or IPv6-only networks)."
+    },
+    "javaPath": {
+      "label": "Java path",
+      "hint": "Leave empty to use Mojang built‑in runtime.",
+      "placeholder": "Example: C:\\Program Files\\Java\\bin\\javaw.exe"
+    },
+    "memory": {
+      "title": "JVM memory",
+      "hint": "It is recommended to leave 1–2 GB of RAM for the system and other apps.",
+      "xmsPlaceholder": "e.g. 1G",
+      "xmxPlaceholder": "e.g. 4G",
+      "quickPresets": "Quick presets:",
+      "currentPair": "Current: {{xms}} / {{xmx}}"
+    },
+    "jvmArgs": {
+      "title": "JVM arguments",
+      "hint": "Flags separated by spaces or new lines.",
+      "placeholder": "-XX:+UseG1GC\n-XX:MaxGCPauseMillis=50\n# Placeholders supported: ${classpath}, ${natives}, ${gameDir}, ${assetsDir}, ${version}",
+      "placeholdersLabel": "Placeholders:",
+      "recommendedPresets": "Recommended presets:"
+    },
+    "presets": {
+      "balanced": "Balanced",
+      "performance": "Max performance",
+      "lowMemory": "Low memory"
+    },
+    "actions": {
+      "detect": "Detect",
+      "browse": "Browse",
+      "save": "Save",
+      "cancel": "Cancel",
+      "resetRecommended": "Reset to recommended",
+      "validate": "Validate",
+      "verify": "Verify files",
+      "verifyChecking": "Verifying...",
+      "reinstall": "Reinstall Java",
+      "reinstalling": "Reinstalling..."
+    },
+    "manageDialog": {
+      "verifyTitle": "What should be checked?",
+      "verifyHint": "Select which Mojang Java runtime versions to verify.",
+      "verifyConfirm": "Verify",
+      "reinstallTitle": "What should be installed / reinstalled?",
+      "reinstallHint": "Select Java versions. Installed ones will be deleted and downloaded again; missing ones will be installed. This may take several minutes.",
+      "reinstallConfirm": "Reinstall",
+      "installed": "Installed",
+      "notInstalled": "Not installed",
+      "selectAll": "Select all",
+      "selectNone": "Clear all",
+      "noneSelected": "Select at least one Java version."
+    },
+    "dialog": {
+      "javaFilterName": "Java"
+    },
+    "toast": {
+      "loadFailedUsingDefaults": "Failed to load Java settings. Using defaults.",
+      "saved": "Java settings saved.",
+      "saveFailed": "Failed to save Java settings.",
+      "chooseJavaFailed": "Failed to choose Java executable.",
+      "noSuitableRuntimes": "No suitable Java runtimes found. Launcher will keep using Mojang runtime.",
+      "detected": "Java detected: {{version}}",
+      "detectFailed": "Error while detecting Java runtime.",
+      "validateOk": "Java and JVM arguments validation passed.",
+      "validateErrors": "Errors detected while validating JVM arguments.",
+      "validateWarnings": "Validation finished with warnings.",
+      "validateFailed": "Failed to validate Java arguments.",
+      "verifyEmpty": "The selected Mojang Java runtimes are not installed. They will download when you launch the game, or use Reinstall Java.",
+      "verifyOk": "Java files are OK ({{checked}} files in {{runtimes}} runtime(s)).",
+      "verifyProblems": "Java issues found: missing {{missing}}, corrupted {{corrupted}} (checked {{checked}}). Reinstall Java to fix.",
+      "verifyFailed": "Failed to verify Java files.",
+      "reinstallOk": "Java reinstalled ({{count}} runtime(s)).",
+      "reinstallFailed": "Failed to reinstall Java."
+    },
+    "validation": {
+      "invalidFormatXms": "Invalid format. Examples: 1024M, 2G.",
+      "invalidFormatXmx": "Invalid format. Examples: 2048M, 4G.",
+      "minGreaterThanMax": "MIN (Xms) cannot be greater than MAX (Xmx).",
+      "maxAboveRecommended": "MAX (Xmx) is above recommended limit. Use not more than {{gb}}GB."
+    },
+    "validationOutput": {
+      "errors": "Errors:",
+      "warnings": "Warnings:",
+      "showJavaVersion": "Show java -version output"
+    }
+  },
+  "play": {
+    "version": {
+      "label": "Version",
+      "loading": "Loading...",
+      "select": "Select version",
+      "searchPlaceholder": "Type version...",
+      "snapshotHint": "Looks like a snapshot. Enable “Show snapshot versions” in Settings → Versions.",
+      "nothingFound": "Nothing found.",
+      "lockedHintTitle": "Fixed by the profile",
+      "lockedHintBody": "Minecraft {{version}} · {{loader}}. Change the version and loader in the profile settings.",
+      "lockedHintAction": "Profile settings"
+    },
+    "install": {
+      "resume": "Resume",
+      "pause": "Pause",
+      "cancel": "Cancel",
+      "preparing": "Preparing files...",
+      "logTitle": "Install log",
+      "logWaiting": "Waiting for messages..."
+    },
+    "loader": {
+      "label": "Loader"
+    },
+    "gameFolder": {
+      "openTitle": "Open game folder",
+      "alt": "Game folder"
+    },
+    "dock": {
+      "folder": "Folder",
+      "mods": "Mods",
+      "logs": "Logs",
+      "modsTitle": "Open mods folder",
+      "logsTitle": "Open logs folder",
+      "settings": "Settings",
+      "noBuild": "No build selected"
+    },
+    "home": {
+      "recentTitle": "Recent packs",
+      "seeAll": "All packs",
+      "emptyCreate": "Create a pack",
+      "emptySlot": "Browse packs",
+      "emptyTitle": "Create your first pack",
+      "emptyHint": "A pack is a separate copy of the game with its own version, mods and settings. Create a new one or import an existing one from a file or another launcher.",
+      "emptyImport": "Import",
+      "modsCount": "{{count}} mods",
+      "playTitle": "Launch this pack",
+      "selectedBadge": "Selected"
+    },
+    "profile": {
+      "selected": "Selected profile: {{name}}"
+    },
+    "console": {
+      "title": "Game console",
+      "clear": "Clear",
+      "show": "Show",
+      "hide": "Hide",
+      "detach": "Detach",
+      "attach": "Attach",
+      "empty": "Logs will appear after the game starts.",
+      "hint": "Controlled by the “Show console on game start” setting in the game section.",
+      "filters": {
+        "label": "Filters",
+        "warnings": "Warnings",
+        "errors": "Errors",
+        "crash": "Crash report",
+        "nothing": "No lines match the selected filters."
+      },
+      "analyzer": {
+        "readingDisk": "Reading logs…",
+        "okBadge": "No errors",
+        "refresh": "Re-read logs",
+        "sourcesLabel": "Checked",
+        "sourceConsole": "console",
+        "sourceLatest": "latest.log",
+        "sourceCrash": "crash reports: {{count}}",
+        "sourceJvmCrash": "JVM error log (hs_err)",
+        "staleSkipped": "Old crash reports from earlier launches skipped: {{count}}",
+        "diskReadFailed": "Couldn't read logs from disk.",
+        "title": "Log analyzer",
+        "show": "Show",
+        "hide": "Hide",
+        "noIssues": "No critical issues found in the log. If the game still crashes, share the full log or crash-report.",
+        "rules": {
+          "oom": {
+            "title": "Out of memory (OutOfMemory)",
+            "fix": "Increase allocated RAM in the profile Java settings. Close other apps and heavy shaders."
+          },
+          "wrongJava": {
+            "title": "Wrong Java version",
+            "fix": "Newer Minecraft versions need Java 17/21. Pick a matching runtime in Java settings or install one automatically.",
+            "fixNeed": "Java {{java}} or newer is required. Select it in the profile's Java settings or install it automatically.",
+            "fixTooNew": "Java {{java}} is too new for this loader version. Pick an older runtime in the profile's Java settings (usually 8 or 17)."
+          },
+          "mixinConflict": {
+            "title": "Mixin / injection conflict",
+            "fix": "Disable recently added mods one by one. Two mods patching the same code is a common cause."
+          },
+          "modIncompatible": {
+            "title": "Mod loading failure",
+            "fix": "Check mod versions for your Minecraft and loader (Fabric/Forge/Quilt). Remove duplicate .jar files."
+          },
+          "missingDependency": {
+            "title": "Missing mod dependency",
+            "fix": "Install required libraries (e.g. Fabric API, Architectury, Kotlin for Forge) matching the mod version."
+          },
+          "versionMismatch": {
+            "title": "Minecraft version mismatch",
+            "fix": "Download the mod built for this pack’s Minecraft version. Mods for other versions usually won’t start."
+          },
+          "corruptJar": {
+            "title": "Corrupt JAR file",
+            "fix": "Reinstall the broken mod/library. Avoid downloading mods from untrusted sources."
+          },
+          "openglGlfw": {
+            "title": "Graphics error (OpenGL/GLFW)",
+            "fix": "Update GPU drivers, try windowed/fullscreen, and disable overlays (Discord, GeForce Experience)."
+          },
+          "authFailed": {
+            "title": "Authentication failed",
+            "fix": "Sign in again via Microsoft/Ely.by on the Accounts tab. Online servers need a valid session."
+          },
+          "exitCode": {
+            "title": "Game exited with an error",
+            "fix": "Check ERROR lines above and crash-reports in the pack folder. Raising RAM or removing the last mod often helps."
+          },
+          "diskSpace": {
+            "title": "Not enough disk space",
+            "fix": "Free space on the drive that holds the game folder and launcher cache."
+          },
+          "accessDenied": {
+            "title": "File access denied",
+            "fix": "Run the launcher with write access to the game folder. Close antivirus or apps locking files."
+          },
+          "nativeCrash": {
+            "title": "Native JVM crash",
+            "fix": "Update drivers, switch Java runtime, and temporarily disable mods with native libs (Sodium/Iris, etc.).",
+            "fixDriver": "The crash happened inside the graphics driver ({{module}}). Update the GPU driver from the vendor's site and turn off overlays and shaders.",
+            "fixJvm": "The Java VM itself crashed ({{module}}). Switch the Java runtime in the profile settings and check the allocated memory."
+          },
+          "fabricLoader": {
+            "title": "Fabric Loader / API issue",
+            "fix": "Update Fabric Loader and Fabric API to versions compatible with your Minecraft version."
+          },
+          "forgeVersion": {
+            "title": "Forge version issue",
+            "fix": "Install the recommended Forge version for this pack, or update mods to match your Forge."
+          },
+          "jvmStart": {
+            "title": "Java failed to start",
+            "fix": "Usually more memory is allocated than available (or a 32-bit Java is used). Lower RAM in the profile's Java settings or install a 64-bit Java."
+          },
+          "badJvmArgs": {
+            "title": "Invalid JVM arguments",
+            "fix": "Java doesn't recognize one of the launch options. Remove it from the extra JVM arguments in the profile settings."
+          },
+          "dependencyVersion": {
+            "title": "Wrong dependency version",
+            "fix": "The required mod is installed, but in the wrong version. Update it (or the dependent mod) to a compatible version."
+          },
+          "duplicateMods": {
+            "title": "Duplicate mods",
+            "fix": "The same mod is installed more than once. Keep a single version — the pack's Conflicts tab can do it."
+          },
+          "apiMismatch": {
+            "title": "Mod built for another version",
+            "fix": "A mod calls a class or method that doesn't exist. Usually the mod or its library is for a different Minecraft version. Update the mod and its dependencies."
+          },
+          "crashReport": {
+            "title": "Game crashed (crash report)",
+            "fix": "The cause from the report is shown below. If mods are listed, start with them."
+          },
+          "worldCorruption": {
+            "title": "World corruption",
+            "fix": "Part of the world data can't be read. Restore the world from a backup or delete the damaged regions."
+          },
+          "shaderCrash": {
+            "title": "Shader error",
+            "fix": "The shader pack failed to compile. Update Iris/Oculus and the shader pack, or turn shaders off."
+          }
+        }
+      }
+    }
+  },
+  "modpacks": {
+    "drop": {
+      "hint": "Release to add to the instance",
+      "added": "Added to “{{name}}”: {{summary}}",
+      "mods": "mods: {{count}}",
+      "resourcepacks": "resource packs: {{count}}",
+      "shaderpacks": "shaders: {{count}}",
+      "skipped": "Could not tell what these files are, skipped: {{files}}"
+    },
+    "export": {
+      "readFilesFailed": "Failed to read build files.",
+      "selectAtLeastOnePath": "Select at least one path.",
+      "previewFailed": "Failed to preview export.",
+      "failed": "Export failed: {{msg}}",
+      "finished": "Export finished.",
+      "errorGeneric": "Export error",
+      "perSecond": "/s"
+    },
+    "profileSettings": {
+      "saved": "Profile settings saved.",
+      "saveFailed": "Failed to save profile settings."
+    },
+    "changeVersion": {
+      "preview": {
+        "title": "Mods on {{version}}",
+        "checking": "Checking mods for this version…",
+        "failed": "Could not check mods. You can still change the version.",
+        "lookupFailed": "Some mods could not be checked: Modrinth or CurseForge did not respond.",
+        "vanilla": "Mods are not loaded in vanilla. Files in the mods folder: {{count}}.",
+        "incompatible": "No matching version, will be disabled",
+        "unknown": "Could not determine, will stay enabled",
+        "update": "Will be updated",
+        "compatible": "Already compatible",
+        "pinned": "Version is pinned",
+        "unknownHint": "These are usually local or modified mods that are not on any platform. Check them manually."
+      },
+      "button": "Change profile version",
+      "title": "Change profile version",
+      "description": "Mods, resource packs, shaders, and worlds stay in this profile and remain available after the version change. The selected Minecraft and loader versions will be installed. Compatible content from Modrinth and CurseForge will be updated automatically. Mods without a release for the new Minecraft version will be disabled and listed in a warning.",
+      "currentVersion": "Current version",
+      "gameVersionLabel": "New Minecraft version",
+      "loaderLabel": "Loader",
+      "loaderVersionLabel": "Loader version",
+      "allVersions": "Show snapshots and alphas",
+      "confirm": "Migrate",
+      "migrating": "Migrating…",
+      "success": "Profile version changed.",
+      "successWithContentUpdates": "Profile version changed. Content files updated: {{count}}.",
+      "successWithIncompatible": "Profile version changed. No release for the new Minecraft version (disabled): {{mods}}{{more}}",
+      "successWithUpdatesAndIncompatible": "Profile version changed. Files updated: {{count}}. No release for the new Minecraft version (disabled): {{mods}}{{more}}",
+      "incompatibleMore": " and {{count}} more",
+      "failed": "Failed to change profile version: {{msg}}",
+      "sameVersion": "Choose a different Minecraft or loader version.",
+      "selectLoaderVersion": "Select a loader version.",
+      "noLoaderVersions": "No loader versions for this Minecraft version"
+    },
+    "common": {
+      "loading": "Loading...",
+      "backToList": "Back to list",
+      "select": "Select"
+    },
+    "actions": {
+      "create": "Create",
+      "import": "Import",
+      "refresh": "Refresh",
+      "play": "Play",
+      "select": "Select",
+      "unselect": "Unselect",
+      "createShortcut": "Create desktop shortcut"
+    },
+    "shortcut": {
+      "created": "Desktop shortcut created.",
+      "failed": "Failed to create shortcut: {{msg}}"
+    },
+    "profile": {
+      "renamed": "Profile renamed.",
+      "renameFailed": "Failed to rename profile.",
+      "changeIconTitle": "Change profile icon",
+      "iconChanged": "Profile icon updated.",
+      "iconChangeFailed": "Failed to update profile icon."
+    },
+    "profileInfo": {
+      "title": "Profile information",
+      "menuItem": "Profile information",
+      "buttonTitle": "Profile information",
+      "gameVersion": "Minecraft version",
+      "loader": "Loader",
+      "loaderVersion": "Loader version",
+      "launcherVersion": "Launcher version",
+      "playtime": "Playtime",
+      "lastPlayedAt": "Last played",
+      "createdAt": "Created",
+      "size": "Disk size",
+      "content": "Content",
+      "folder": "Folder",
+      "profileId": "Profile ID",
+      "close": "Close",
+      "contentMods": "{{count}} mod(s)",
+      "contentResourcepacks": "{{count}} pack(s)",
+      "contentShaders": "{{count}} shader(s)"
+    },
+    "list": {
+      "searchPlaceholder": "Search...",
+      "activeBadge": "Active",
+      "playSelectedTitle": "Launch game with this profile",
+      "playtimeLabel": "Playtime",
+      "lastPlayed": "Last played: {{date}}",
+      "empty": "No profiles yet. Click “Create” to add one.",
+      "noResults": "Nothing found. Try a different search.",
+      "layout": {
+        "list": "List",
+        "grid": "Grid"
+      },
+      "ungroupedTitle": "Ungrouped",
+      "createGroupMenu": "New profile group",
+      "editGroupMenu": "Edit group",
+      "deleteGroupMenu": "Delete group",
+      "dropHint": "Drop here",
+      "deleteSelected": "Delete selected",
+      "selectedCount": "Selected: {{count}}",
+      "title": "My profiles",
+      "newGroup": "New group",
+      "groupActions": "Group actions",
+      "dragCount": "{{count}} profiles",
+      "clearSelection": "Clear selection"
+    },
+    "groups": {
+      "createTitle": "New profile group",
+      "editTitle": "Edit group",
+      "nameLabel": "Group name",
+      "namePlaceholder": "e.g. Survival, Tech…",
+      "colorLabel": "Color",
+      "profilesLabel": "Profiles in group",
+      "profilesPlaceholder": "Select profiles…",
+      "profilesSelected": "Selected: {{count}}",
+      "create": "Create group",
+      "save": "Save",
+      "cancel": "Cancel",
+      "created": "Group “{{name}}” created.",
+      "updated": "Group “{{name}}” updated.",
+      "deleted": "Group deleted.",
+      "nameRequired": "Enter a group name.",
+      "color": {
+        "purple": "Purple",
+        "orange": "Orange",
+        "red": "Red",
+        "yellow": "Yellow",
+        "green": "Green"
+      }
+    },
+    "create": {
+      "title": "Create profile",
+      "uploadIcon": "Upload\nicon",
+      "removeIcon": "Remove icon",
+      "nameLabel": "Name:",
+      "namePlaceholder": "Enter profile name...",
+      "loaderLabel": "Loader:",
+      "gameVersionLabel": "Game version:",
+      "loaderVersionLabel": "Loader version:",
+      "loaderChannel": {
+        "stable": "Stable",
+        "beta": "Beta",
+        "alpha": "Alpha"
+      },
+      "allVersions": "All versions",
+      "presetLabel": "Build preset:",
+      "noPreset": "No preset",
+      "saveFormAsPreset": "Save current options as preset"
+    },
+    "presets": {
+      "title": "Build presets",
+      "manage": "Presets",
+      "empty": "No presets yet. Save profile options as a preset.",
+      "apply": "Apply",
+      "delete": "Delete",
+      "saveFromProfile": "Save as preset",
+      "saveFromForm": "Save from form",
+      "namePrompt": "Preset name",
+      "saved": "Preset saved.",
+      "deleted": "Preset deleted.",
+      "applied": "Preset applied to the create form.",
+      "saveFailed": "Failed to save preset.",
+      "deleteFailed": "Failed to delete preset.",
+      "deleteConfirm": "Delete preset “{{name}}”?",
+      "loaderInfo": "{{loader}} · {{version}}"
+    },
+    "lazy": {
+      "title": "Mod sets",
+      "manage": "Mod sets",
+      "hint": "Sets of mods, resource packs and shaders. The launcher downloads them for the game version and loader of each build.",
+      "empty": "No sets yet. Select files in a build and add them to a set.",
+      "newSet": "New set",
+      "namePlaceholder": "Set name",
+      "createSet": "Create",
+      "autoApply": "Add to every new build",
+      "noItems": "This set is empty",
+      "removeItem": "Remove from set",
+      "deleteSet": "Delete set",
+      "deleteConfirm": "Delete the set \"{{name}}\"?",
+      "createSection": "Mod sets",
+      "createHint": "Downloaded after the build is created.",
+      "createNone": "No sets",
+      "createManage": "Manage",
+      "addToSet": "To mod set",
+      "addTitle": "Add to a set: {{count}}",
+      "addHere": "Add",
+      "addedToast": "Added to \"{{name}}\": {{count}}",
+      "addedSkipped": "Skipped without a source: {{skipped}}",
+      "nothingRecognized": "The selected files were not found on Modrinth or CurseForge, so they can't be added to a set.",
+      "applyMenu": "From mod sets",
+      "applyTitle": "Install mod sets",
+      "applyConfirm": "Install",
+      "applyHint": "Choose the sets for this build.",
+      "appliedToast": "Mod sets: installed {{installed}}, already present {{present}}",
+      "appliedUnavailable": "No version for this build: {{names}}",
+      "appliedFailed": "Errors: {{names}}",
+      "applyFailed": "Failed to install mod sets: {{msg}}",
+      "applyJob": "Mod sets",
+      "saveFailed": "Failed to save the set.",
+      "loadFailed": "Failed to load sets."
+    },
+    "contentUpdates": {
+      "appliedPartial": "Updated {{count}} file(s), {{failed}} failed. {{msg}}",
+      "check": "Check for updates",
+      "checking": "Checking for updates…",
+      "checkFailed": "Could not check for updates: {{msg}}",
+      "noneFound": "All files on this tab are up to date (Modrinth and CurseForge).",
+      "found": "{{count}} update(s) available",
+      "modalTitle": "Updates",
+      "modalSubtitle": "Newer versions are available for this profile.",
+      "currentVersion": "Current",
+      "latestVersion": "Available",
+      "updateSelected": "Update selected",
+      "updateAll": "Update all",
+      "updating": "Downloading updates…",
+      "applied": "Updated {{count}} file(s)",
+      "applyFailed": "Update failed: {{msg}}",
+      "selectAtLeastOne": "Select at least one file to update.",
+      "pinnedSkipped": "Pinned files are not updated: {{count}}.",
+      "notOnModrinth": "Files not found on Modrinth or CurseForge are skipped.",
+      "noneFoundForItem": "No updates for this file.",
+      "rollback": "Undo update",
+      "rollbackTitle": "Undo the last update ({{count}} files)",
+      "rollbackConfirm": "Restore the previous versions of {{count}} files? The new versions downloaded by the update will be removed.",
+      "rollbackConfirmLabel": "Undo",
+      "rollbackDone": "Files restored: {{count}}",
+      "rollbackFailed": "Could not undo the update: {{msg}}"
+    },
+    "screenshots": {
+      "title": "Screenshots",
+      "subtitle": "Game",
+      "button": "Screenshots",
+      "listTitle": "Gallery",
+      "loading": "Loading…",
+      "empty": "No screenshots yet. Take one in-game (F2) and it will show up here.",
+      "refresh": "Refresh",
+      "openFolder": "Open folder",
+      "close": "Close",
+      "open": "Open",
+      "delete": "Delete",
+      "selectHint": "Select a screenshot from the gallery.",
+      "previewFailed": "Failed to load preview.",
+      "deleted": "Screenshot deleted.",
+      "deleteConfirm": "Delete screenshot “{{name}}”?",
+      "deleteFailed": "Failed to delete screenshot: {{msg}}",
+      "openFolderFailed": "Failed to open folder: {{msg}}",
+      "openFailed": "Failed to open screenshot: {{msg}}",
+      "copy": "Copy",
+      "copied": "Screenshot copied to clipboard.",
+      "copyFailed": "Failed to copy screenshot: {{msg}}"
+    },
+    "import": {
+      "fileSection": "From a file",
+      "title": "Import a modpack",
+      "chooseFile": "Choose file",
+      "progress": {
+        "preparing": "Preparing…",
+        "extractingOverrides": "Extracting pack overrides…",
+        "downloading": "Downloading: {{current}} / {{total}}{{msg}}",
+        "importing": "Importing…"
+      },
+      "dropzone": {
+        "active": "Release the file to start the import",
+        "title": "Drop a .mrpack or .zip file here",
+        "hint": "Works with Modrinth packs, CurseForge archives, Prism and MultiMC exports, and .zip files from 16Launcher. Missing mods are downloaded automatically."
+      },
+      "started": "Import started…",
+      "finishedWithVersion": "Import finished. Profile created with pack's game version.",
+      "failed": "Could not import the modpack: {{msg}}",
+      "finishedWithMissing": "Profile created, but {{count}} files could not be downloaded. Add them manually.",
+      "cancelledKeyword": "cancelled"
+    },
+    "header": {
+      "profiles": "Profiles",
+      "importMrpack": "Import from file",
+      "totalProfiles": "Total profiles: {{count}}"
+    },
+    "contentTabs": {
+      "mods": "Mods",
+      "resourcepacks": "Resource packs",
+      "shaderpacks": "Shaders"
+    },
+    "toast": {
+      "itemDeleted": "Deleted “{{name}}”",
+      "itemsDeleted": "Files deleted: {{count}}",
+      "restoreFailed": "Could not restore files: {{count}}",
+      "selectLoaderBeforePreset": "Select a loader version before saving the preset.",
+      "loadProfilesFailed": "Failed to load profiles.",
+      "loadFilesFailed": "Failed to load profile files.",
+      "filesAdded": "Files added to profile.",
+      "addFilesFailed": "Failed to add files.",
+      "deleteFileFailed": "Failed to delete file.",
+      "openFolderFailed": "Failed to open profile folder.",
+      "noMatchingFiles": "No matching files for this tab (check file extensions).",
+      "enterProfileName": "Enter profile name.",
+      "selectLoaderVersion": "Select a loader version.",
+      "manifestUrlFailed": "Failed to resolve manifest URL for version {{version}}.",
+      "versionNotInstalled": "Version {{version}} is not installed. Starting download…",
+      "versionInstalled": "Version {{version}} installed.",
+      "installingFabric": "Installing Fabric {{version}}…",
+      "installingFabricApi": "Installing Fabric API…",
+      "fabricApiInstallFailed": "Profile created, but Fabric API could not be installed: {{msg}}",
+      "installingQuilt": "Installing Quilt {{version}}…",
+      "installingForge": "Installing Forge {{version}}…",
+      "installingNeoForge": "Installing NeoForge {{version}}…",
+      "profileCreatedInstallFailed": "Profile created, but failed to install version: {{msg}}",
+      "profileCreated": "Profile created.",
+      "createProfileFailed": "Failed to create profile: {{msg}}",
+      "profileUnselected": "Profile “{{name}}” unselected.",
+      "profileSelected": "Profile “{{name}}” selected.",
+      "selectProfileFailed": "Failed to select profile.",
+      "profileDeleted": "Profile deleted.",
+      "profilesDeleted": "Profiles deleted: {{count}}.",
+      "deleteProfilesPartial": "Failed to delete {{failed}} profiles.",
+      "deleteProfileFailed": "Failed to delete profile.",
+      "deleteProfileFailedWithMsg": "Failed to delete profile: {{msg}}",
+      "loadLoaderVersionsFailed": "Failed to load loader versions: {{msg}}",
+      "profileImported": "Profile imported.",
+      "importProfileFailed": "Import failed: {{msg}}",
+      "noProfilesFound": "No profiles found. Try the launcher's root (not instances) - but instances is supported too."
+    },
+    "manage": {
+      "pinVersion": "Pin version",
+      "unpinVersion": "Unpin version",
+      "pinFailed": "Could not change the version pin.",
+      "empty": {
+        "title": {
+          "mods": "No mods in this instance yet",
+          "resourcepacks": "No resource packs in this instance yet",
+          "shaderpacks": "No shaders in this instance yet"
+        },
+        "find": {
+          "mods": "Find mods for {{version}} {{loader}}",
+          "resourcepacks": "Find resource packs for {{version}}",
+          "shaderpacks": "Find shaders for {{version}}"
+        },
+        "fromPc": "Add from computer",
+        "noMatches": "Nothing matches the search and filter",
+        "resetFilters": "Reset search and filter"
+      },
+      "enableItem": "Enable",
+      "disableItem": "Disable",
+      "toggleFailed": "Failed to change item state.",
+      "backToList": "Back to list",
+      "openFolder": "Open folder",
+      "exportBuild": "Export build",
+      "backups": "Profile backups",
+      "profileSettings": "Profile settings",
+      "selectProfile": "Select profile",
+      "searchFiles": "Search files...",
+      "rescan": "Rescan",
+      "downloadFromCatalog": "Download from catalog",
+      "chooseFileFromPc": "Choose file from PC",
+      "loadingFiles": "Loading files...",
+      "dropHint": "Drag files from Explorer here or use “Add”.",
+      "update": "Update",
+      "splitResizeAria": "Drag to resize the list and console",
+      "splitResizeTitle": "Drag to widen or narrow the list",
+      "currentOutput": "Current output",
+      "clearOnlyLive": "Clear only applies to current output",
+      "consoleResizeHint": "Drag the bar between the list and console to resize - width is saved. Logs persist; before a new launch, output is archived.",
+      "noVersionsForGame": "No versions for the selected game",
+      "resourcePackOrderHint": "Packs higher in the list override those below - same as in-game",
+      "reorderResourcePacks": "Reorder",
+      "reorderResourcePacksDone": "Done",
+      "dragToReorder": "Drag to reorder",
+      "disabledResourcePacks": "Disabled",
+      "reorderFailed": "Failed to reorder resource packs.",
+      "shaderPackActiveHint": "Only one shader pack can be active at a time (Iris / OptiFine).",
+      "enableShader": "Set as active",
+      "disableShader": "Disable shaders",
+      "inactiveShaders": "Inactive"
+    },
+    "externalImport": {
+      "nothingMatches": "No instances match this search.",
+      "found": "Instances found: {{count}}",
+      "pathAutoPlaceholder": "Launcher folder (optional)",
+      "title": "From another launcher",
+      "hint": "Standard folders are found automatically. If your instances live elsewhere, pick the launcher folder and press “Find instances”.",
+      "copying": "Copying files…",
+      "importing": "Import…",
+      "launcher": "Launcher",
+      "auto": "Auto",
+      "path": "Path",
+      "pathPlaceholder": "Example: C:\\Users\\…\\AppData\\Roaming\\PrismLauncher",
+      "scanning": "Searching…",
+      "scan": "Find instances",
+      "sort": "Sort",
+      "sortName": "Name",
+      "sortDate": "Date",
+      "sortSize": "Size"
+    },
+    "contextMenu": {
+      "settings": "Settings",
+      "moveToGroup": "Move to group",
+      "removeFromGroup": "Remove from group",
+      "pinToSidebar": "Pin to sidebar",
+      "unpinFromSidebar": "Unpin from sidebar",
+      "deleteProfile": "Delete profile",
+      "deleteSelectedProfiles": "Delete selected ({{count}})",
+      "renameProfile": "Rename profile",
+      "editProfile": "Edit profile",
+      "createBackup": "Create backup",
+      "manageBackups": "Backups…"
+    },
+    "backups": {
+      "title": "Profile backups",
+      "hint": "Snapshots of “{{name}}”. Restore creates a new profile.",
+      "total": "{{count}} · {{size}}",
+      "loading": "Loading backups…",
+      "create": "Create backup",
+      "creating": "Creating…",
+      "created": "Backup created.",
+      "createFailed": "Failed to create backup: {{msg}}",
+      "loadFailed": "Failed to load backups.",
+      "empty": "No backups yet",
+      "emptyHint": "Create a snapshot of this build so you can restore it later as a new copy.",
+      "restore": "Restore",
+      "restoring": "Restoring…",
+      "restored": "Restored as “{{name}}”.",
+      "restoreFailed": "Failed to restore backup: {{msg}}",
+      "delete": "Delete",
+      "deleted": "Backup deleted.",
+      "deleteFailed": "Failed to delete backup: {{msg}}",
+      "openFolder": "Open folder",
+      "openFolderFailed": "Failed to open backups folder.",
+      "autoCreated": "Automatic backup of “{{name}}” created.",
+      "settingsSaveFailed": "Couldn't save backup settings.",
+      "auto": {
+        "label": "Automatic backups:",
+        "hint": "A backup is made after you close the game, if the chosen period has passed since the last automatic one.",
+        "option": {
+          "off": "Off",
+          "daily": "Once a day",
+          "weekly": "Once a week"
+        }
+      },
+      "keep": {
+        "label": "Automatic backups to keep:"
+      },
+      "beforeUpdate": {
+        "label": "Before updating mods:",
+        "hint": "A full backup of the modpack, configs and worlds included, not just the old mod files.",
+        "option": {
+          "off": "Do nothing",
+          "ask": "Offer a backup",
+          "auto": "Back up automatically"
+        },
+        "askTitle": "Make a backup?",
+        "askMessage": "You can save a copy of the modpack before updating, so you can go back if something breaks.",
+        "askConfirm": "Make a backup",
+        "askSkip": "Update without it",
+        "failed": "Backup failed, update cancelled: {{msg}}"
+      },
+      "kind": {
+        "auto": "Auto",
+        "pre_update": "Before update"
+      }
+    },
+    "deleteConfirm": {
+      "bulkPrompt": "Delete the selected profiles ({{count}})? This action cannot be undone.",
+      "title": "Delete confirmation"
+    },
+    "launchHooks": {
+      "title": "Launch commands",
+      "hint": "Commands run with your user account's permissions, inside the profile folder. INST_ID, INST_DIR, INST_VERSION and INST_JAVA are available, plus INST_EXIT_CODE after the game exits. Don't paste commands you don't trust.",
+      "loadFailed": "Couldn't load launch commands",
+      "preLaunch": {
+        "label": "Before launch",
+        "hint": "The launcher waits for the command to finish. If it fails, the game won't start."
+      },
+      "wrapper": {
+        "label": "Wrapper command",
+        "hint": "The game starts through this program. If the wrapper creates a separate process, the stop button and resource monitor may only affect the wrapper."
+      },
+      "postExit": {
+        "label": "After the game exits",
+        "hint": "Runs once the game closes. It won't run if the launcher has been closed by then."
+      },
+      "env": {
+        "label": "Environment variables",
+        "hint": "Passed to the game and this profile's commands.",
+        "name": "Name",
+        "value": "Value",
+        "add": "Add variable",
+        "remove": "Remove variable"
+      },
+      "errors": {
+        "invalidEnvName": "A variable name can't be empty or contain spaces or =",
+        "invalidWrapper": "The wrapper command has an unclosed quote",
+        "preLaunchFailed": "the pre-launch command failed ({{detail}}). See the game console for its output.",
+        "preLaunchTimeout": "the pre-launch command didn't finish within 10 minutes and was stopped",
+        "wrapperFailed": "couldn't start the wrapper command ({{detail}})"
+      }
+    },
+    "profileSettingsModal": {
+      "title": "Profile settings",
+      "general": "General",
+      "hint": "These settings apply only to the selected profile and are used when launching the game.",
+      "closeLauncherOnStart": "Close launcher when game starts:",
+      "checkGameProcesses": "Check running game processes:",
+      "account": "Profile account:",
+      "accountHint": "When this profile is launched, the launcher switches to the selected account automatically.",
+      "accountDefault": "Currently active account",
+      "showConsoleOnLaunch": "Show console on launch:",
+      "resolution": "Window resolution:",
+      "resolutionWidth": "Width",
+      "resolutionHeight": "Height",
+      "resolutionReset": "Use launcher defaults",
+      "memoryRam": "Memory (RAM):"
+    },
+    "editor": {
+      "nav": {
+        "content": "Content",
+        "launch": "Launch",
+        "version": "Version",
+        "worlds": "Worlds & config",
+        "conflicts": "Conflicts",
+        "cleanup": "Storage",
+        "backups": "Backups"
+      },
+      "moreActions": "More",
+      "duplicate": "Duplicate build",
+      "duplicating": "Copying…",
+      "duplicated": "Build “{{name}}” created.",
+      "duplicateFailed": "Failed to duplicate: {{msg}}",
+      "filterAll": "All",
+      "filterEnabled": "On",
+      "filterDisabled": "Off",
+      "filterUpdates": "Updates",
+      "selectedCount": "Selected: {{count}}",
+      "bulkEnable": "Enable",
+      "bulkDisable": "Disable",
+      "bulkDelete": "Delete",
+      "selectAll": "Select all",
+      "clearSelection": "Clear selection",
+      "worldsTitle": "Worlds",
+      "worldsHint": "Manage saves and open the build config folder.",
+      "worldsEmpty": "No worlds yet.",
+      "worldsLoading": "Loading worlds…",
+      "worldsOpen": "Open",
+      "worldsSearch": "Search worlds…",
+      "worldsNoSearchResults": "No matches.",
+      "worldsTotal": "{{count}} · {{size}}",
+      "worldsDelete": "Delete",
+      "worldsDeleting": "Deleting…",
+      "worldsDeleteConfirm": "Delete {{count}} world(s)? This cannot be undone.",
+      "worldsDeleted": "Deleted worlds: {{count}}.",
+      "worldsDeleteFailed": "Failed to delete worlds: {{msg}}",
+      "openSaves": "saves folder",
+      "openConfig": "config folder",
+      "openFailed": "Failed to open folder.",
+      "lastPlayed": "Last played: {{date}}",
+      "cleanupFiles": "Files: {{count}}",
+      "backupBeforeChange": "Create backup before version change",
+      "backupBeforeChangeHint": "Recommended — you can restore if something goes wrong.",
+      "backingUp": "Creating backup…",
+      "cleanupTitle": "Disk usage",
+      "cleanupHint": "Folder sizes for this build. You can clear logs, cache, and crash-reports.",
+      "cleanupLoading": "Calculating…",
+      "cleanupTotal": "Total: {{size}}",
+      "cleanupCleanable": "Cleanable",
+      "cleanupRun": "Clean selected",
+      "cleanupRunning": "Cleaning…",
+      "cleanupDone": "Freed {{size}}.",
+      "cleanupFailed": "Cleanup failed: {{msg}}",
+      "cleanupNothing": "Nothing to clean.",
+      "folderMods": "Mods",
+      "folderResourcepacks": "Resource packs",
+      "folderShaderpacks": "Shaders",
+      "folderSaves": "Worlds",
+      "folderConfig": "Config",
+      "folderDatapacks": "Datapacks",
+      "folderLogs": "Logs",
+      "folderCrashReports": "Crash-reports",
+      "folderCache": "Cache",
+      "folderFabric": "Fabric cache",
+      "folderOther": "Other",
+      "backupsOpen": "Open backups manager",
+      "beta": "BETA"
+    },
+    "conflicts": {
+      "title": "Conflicts",
+      "loading": "Checking…",
+      "count": "{{count}}",
+      "none": "No obvious conflicts found. Checked duplicates, dependencies, breaks, and version compatibility.",
+      "noneTitle": "All clear",
+      "hint": "Analysis reads fabric.mod.json / mods.toml for duplicate mod ids, missing dependencies, declared breaks, and Minecraft version mismatches.",
+      "refresh": "Recheck",
+      "summaryErrors": "Errors: {{count}}",
+      "summaryWarnings": "Warnings: {{count}}",
+      "openFromContent": "Open conflicts",
+      "actions": {
+        "disableExtra": "Disable extras",
+        "keepLatest": "Keep latest",
+        "disableWrongLoader": "Disable wrong loader",
+        "disableAll": "Disable all",
+        "disableIncompatible": "Disable",
+        "disableDependents": "Disable dependents",
+        "disableFirst": "Disable first",
+        "disableSecond": "Disable second",
+        "enableDependency": "Enable dependency"
+      },
+      "severity": {
+        "error": "Error",
+        "warning": "Warning"
+      },
+      "affected": "Affected",
+      "solutions": "Possible solutions",
+      "groupsCount": "Groups: {{count}}",
+      "groupSummary": "{{count}} · errors: {{errors}}",
+      "groups": {
+        "duplicate": "Duplicates",
+        "breaks": "Incompatibilities",
+        "dependency": "Dependencies",
+        "loader": "Loader",
+        "incompatible": "Minecraft version",
+        "other": "Other"
+      },
+      "duplicate": {
+        "title": "Duplicate mod files",
+        "reason": "Multiple enabled files look like the same mod: {{name}}.",
+        "solutionDisableExtra": "Disable or remove the extra versions (leave one).",
+        "solutionKeepLatest": "Keep the newest version that matches your Minecraft version."
+      },
+      "duplicateId": {
+        "title": "Same mod id",
+        "reason": "Multiple files declare the same mod “{{name}}” (id: {{id}})."
+      },
+      "mixedVariants": {
+        "title": "Mixed loader variants",
+        "reason": "A mod looks like it has multiple loader builds enabled at once: {{variants}}.",
+        "solutionKeepOne": "Keep only the variant that matches your profile loader.",
+        "solutionUseUniversal": "If available, use a universal build instead of separate loader variants."
+      },
+      "loaderMismatch": {
+        "title": "Loader mismatch (likely)",
+        "reason": "The profile uses {{loader}}, but the mod filename hints: {{variants}}.",
+        "reasonMeta": "The profile uses {{loader}}, but the mod is made only for: {{variants}}. The loader won't run it.",
+        "solutionPickCorrect": "Install the {{loader}} version of the mod (or use a universal build).",
+        "solutionSwitchLoader": "Or switch the profile loader to match the mod set."
+      },
+      "missingDep": {
+        "title": "Missing required dependency",
+        "reason": "Mod “{{id}}” is required but not found among enabled files.",
+        "solutionInstall": "Install the missing mod from the catalog.",
+        "solutionDisable": "Or disable the mods that require it."
+      },
+      "disabledDep": {
+        "title": "Dependency is disabled",
+        "reason": "Mod “{{id}}” is required. It's in the pack ({{file}}) but disabled.",
+        "solutionEnable": "Enable this mod."
+      },
+      "depVersion": {
+        "title": "Wrong dependency version",
+        "reason": "“{{id}}” is required in version {{required}}, but {{installed}} is installed.",
+        "solutionUpdate": "Update the mod to a matching version, or install a compatible version of the dependent mod."
+      },
+      "breaks": {
+        "title": "Mods break each other",
+        "reason": "“{{a}}” declares incompatibility with “{{b}}”.",
+        "solutionDisableOne": "Keep only one of these mods.",
+        "solutionFindAlt": "Or find compatible versions / alternatives."
+      },
+      "incompatible": {
+        "title": "Incompatible with version",
+        "reason": "Mod “{{name}}” does not match the current Minecraft / loader version.",
+        "solutionDisable": "Disable the mod or find a compatible version."
+      }
+    },
+    "exportModal": {
+      "title": "Export build",
+      "format": "Format",
+      "mrpackHint": "Mods found on Modrinth are linked by hash (not embedded), so the .mrpack stays small. Configs and unknown jars go into overrides.",
+      "zipHint": "ZIP puts every selected file directly into the archive. It works well for a full local backup, but it is much heavier for sharing with a friend or uploading to a VPS.",
+      "presets": "Presets",
+      "presetRecommended": "Recommended",
+      "presetMinimal": "Minimal",
+      "presetFull": "Everything",
+      "quickFolders": "Quick select",
+      "ignorePatterns": "Ignore patterns",
+      "ignoreHint": "Supported: *, **, ! (negation). Saves/logs are excluded by default.",
+      "buildFiles": "Build files",
+      "searchPlaceholder": "Search files…",
+      "selectedSummary": "{{count}} files · {{size}}",
+      "noSearchResults": "No matches.",
+      "refresh": "Refresh",
+      "selectAll": "Select all",
+      "clearAll": "Clear",
+      "scanning": "Scanning...",
+      "noData": "No data.",
+      "emptyFolder": "Build folder is empty.",
+      "preview": "Preview",
+      "previewing": "Resolving…",
+      "export": "Export",
+      "exporting": "Exporting…",
+      "finalContents": "Final contents",
+      "size": "Size:",
+      "packSize": "Pack:",
+      "downloadSize": "Downloads:",
+      "linkedMods": "{{count}} via Modrinth",
+      "overrideFiles": "{{count}} files in overrides",
+      "nothingIncluded": "Nothing will be included.",
+      "done": "Done",
+      "openFolder": "Open folder"
+    },
+    "continue": {
+      "label": "Continue",
+      "worldTitle": "Jump straight into world “{{name}}”",
+      "serverTitle": "Connect straight to server {{name}}"
+    },
+    "iconPicker": {
+      "title": "Modpack icon",
+      "fromFile": "Upload file…",
+      "apply": "Apply",
+      "background": "Background",
+      "noBackground": "No background",
+      "textures": "Game textures",
+      "noTextures": "Textures unavailable",
+      "noTexturesHint": "Install any Minecraft version to pick an icon from game textures, or upload your own file."
+    }
+  },
+  "friends": {
+    "feed": {
+      "title": "Activity feed",
+      "empty": "Nothing new yet",
+      "emptyHint": "Friends' achievements, rooms and what they are playing will appear here.",
+      "achievement": "New achievement: {{title}}",
+      "roomOpened": "Opened a room",
+      "roomOpenedNamed": "Opened the room \"{{name}}\"",
+      "roomSession": "Started a game in a room",
+      "roomSessionNamed": "Started a game in the room \"{{name}}\"",
+      "shareLabel": "Show friends what I am playing",
+      "shareHint": "When off, friends only see that you are in the launcher. They can always see your achievements and rooms."
+    },
+    "subtitleSignedIn": "Add friends, see who's online, and join their rooms.",
+    "subtitleSignedOut": "Sign in on the Accounts tab to see your friends.",
+    "friendNicknamePlaceholder": "Friend's nickname",
+
+    "suggest": {
+
+      "title": "Similar nicknames",
+
+      "searching": "Searching…",
+
+      "empty": "Nobody with a similar nickname",
+
+      "isFriend": "Friends",
+
+      "requestSent": "Request sent",
+
+      "add": "Add"
+
+    },
+    "searchPlaceholder": "Find a friend…",
+    "add": "Add",
+    "refresh": "Refresh",
+    "requests": "Requests",
+    "incomingTitle": "Requests",
+    "incomingCount": "Requests ({{count}})",
+    "signInFirst": "Sign in first in the Accounts tab.",
+    "authGateTitle": "Sign in",
+    "authGateBody": "Friends and online status need a sign-in from the Accounts tab.",
+    "emptyTitle": "No friends yet",
+    "emptyBody": "Enter a nickname above and send a request - or invite friends to create a 16Launcher account.",
+    "emptyFocusAdd": "Add a friend",
+    "noIncoming": "No new requests.",
+    "accept": "Accept",
+    "reject": "Decline",
+    "yourFriends": "Friends",
+    "friendsOnline": "{{online}} of {{total}} online",
+    "noFriends": "No friends yet - enter a nickname above and send a request.",
+    "noSearchResults": "No friends match that search.",
+    "statFriends": "Friends",
+    "statFriendsHint": "In your list",
+    "statOnline": "Online",
+    "statRequests": "Requests",
+    "statRooms": "Rooms",
+    "statRoomsHint": "Playing now",
+    "filterAll": "All",
+    "filterOnline": "Online",
+    "filterOffline": "Offline",
+    "onlineSection": "Online",
+    "offlineSection": "Offline",
+    "inRoom": "In a room",
+    "lastSeenJustNow": "just now",
+    "lastSeenMinutes": "{{count}} min ago",
+    "lastSeenHours": "{{count}} h ago",
+    "lastSeenDays": "{{count}} d ago",
+    "lastSeenNever": "hasn't been online recently",
+    "openRooms": "Go to rooms",
+    "howToTitle": "Friends",
+    "howToStep1": "16Launcher nickname → send a request.",
+    "howToStep2": "After they accept, they show up in the list.",
+    "howToStep3": "See who's online and when they last opened the launcher.",
+    "howToStep4": "Join a friend's room from this tab.",
+    "remove": "Remove",
+    "removeConfirm": "Remove {{nick}} from friends?",
+    "online": "Online",
+    "offline": "Offline",
+    "status": {
+      "launcher": "In launcher",
+      "playingModpack": "Playing",
+      "playingModpackNamed": "Playing modpack {{name}}",
+      "playingServer": "Playing on a server",
+      "playingServerNamed": "Playing on {{name}}",
+      "playingWorld": "Playing a singleplayer world",
+      "playingWorldNamed": "Playing {{name}}",
+      "roomFallback": "friend world",
+      "playingRoomWorld": "Playing {{world}}",
+      "playingRoomWorldWith": "Playing {{world}} with {{nick}}",
+      "playingRoomWorldNamedRoom": "Playing {{world}} in room {{room}}",
+      "playingRoomWorldWithNamedRoom": "Playing {{world}} with {{nick}} in room {{room}}"
+    },
+    "profileTitle": "Profile",
+    "viewProfile": "View profile",
+    "addFriend": "Add friend",
+    "alreadyFriends": "Already friends",
+    "toast": {
+      "requestAccepted": "Request accepted",
+      "requestRejected": "Request declined",
+      "signInFirst": "Sign in first in the Accounts tab",
+      "cannotAddSelf": "You cannot send a request to yourself",
+      "requestExists": "Request already exists or you are already friends.",
+      "requestSent": "Request sent",
+      "removed": "Friend removed"
+    },
+    "profileFriendsOnly": "Only friends can see this profile",
+    "profileFriendsOnlyHint": "Add the player as a friend to see their achievements and status."
+  },
+  "rooms": {
+    "modpackGate": {
+      "title": "Room instance",
+      "body": "To enter this room, you need to download the instance \"{{name}}\" ({{version}}).",
+      "hint": "Mods from Modrinth and CurseForge are downloaded from there, everything else comes directly from the host. You will see the file list before installing.",
+      "haveIt": "I already have it",
+      "download": "Download",
+      "leave": "Leave room",
+      "back": "Back",
+      "waitingHost": "Waiting for the connection to the room host…",
+      "pickHint": "Pick your instance on {{version}}. The launcher will compare it with the host's and fetch the differences.",
+      "noMatching": "You have no instance on this version. Press \"Back\" and choose \"Download\".",
+      "wrongVersion": "The instance uses a different game version or loader"
+    },
+    "createModpack": {
+      "label": "Select an instance",
+      "hint": "Members will have to download it to enter the room. Files are sent from you directly, not through the server.",
+      "empty": "You have no instances yet.",
+      "mods": "{{count}} mods"
+    },
+    "sync": {
+      "missingAssets": "Different pack files (textures, sounds, structures): {{count}}",
+      "assetsReceived": "Pack files from the host: {{count}}",
+      "backupDir": "Previous packs, scripts and options.txt were saved to: {{path}}",
+      "applyOptions": "Enable the same resource packs and shader as the host. Controls, graphics and sound stay yours.",
+      "removeExtraScripts": "Remove my scripts the host does not have ({{count}}). They will be kept in a backup.",
+      "packsReceived": "Resource packs and shaders from the host: {{count}}",
+      "scriptsReceived": "Scripts from the host: {{count}}. This is code that will run in the game.",
+      "extraScripts": "You have scripts the host does not have: {{count}}",
+      "optionsDiffer": "Enabled resource packs or shader differ from the host's.",
+      "missingScripts": "Different KubeJS and CraftTweaker scripts: {{count}}",
+      "missingPacks": "Missing resource packs and shaders: {{count}}",
+      "title": "Host's instance",
+      "guestHint": "Compare your instance with the host's and fetch what is missing: mods, resource packs, shaders, configs and scripts. Everything available on Modrinth and CurseForge is downloaded from there, the rest comes directly from the host, not through the launcher server.",
+      "ownerHint": "Members can copy the mods, resource packs and shaders of your selected instance, and the resource pack order. Files go directly between players.",
+      "shareLabel": "Allow copying my instance",
+      "shareConfigsLabel": "Share configs and scripts",
+      "shareConfigsHint": "Configs, KubeJS and CraftTweaker scripts. Some mods keep tokens and keys in their configs. Turn this off if you are not sure.",
+      "start": "Compare instances",
+      "needProfile": "Select the instance to copy files into.",
+      "hostUnavailable": "No connection to the host, or the host has an old launcher version.",
+      "modalTitle": "Sync with the host's instance",
+      "step": {
+        "create": "Creating the instance and installing Minecraft with the loader…",
+        "manifest": "Getting the host's file list…",
+        "plan": "Comparing instances…",
+        "platform": "Downloading mods from Modrinth and CurseForge…",
+        "transfer": "Receiving files from the host…",
+        "transferProgress": "Receiving files from the host: {{done}} of {{total}} MB",
+        "inspect": "Checking received files…",
+        "apply": "Installing…"
+      },
+      "error": {
+        "disabled": "The host does not allow copying their instance.",
+        "no_profile": "The host has no instance selected.",
+        "failed": "The host could not build the file list.",
+        "no_channel": "No connection to the host. Try reconnecting.",
+        "timeout": "The host did not respond in time.",
+        "unknown": "Sync failed: {{detail}}"
+      },
+      "versionMismatch": "The instances use different versions: the host has {{host}}, you have {{local}}. Select an instance with the same version.",
+      "upToDate": "Your instance already matches the host's.",
+      "missingMods": "Missing mods: {{count}}",
+      "missingConfigs": "Different configs: {{count}}",
+      "enable": "Your disabled mods to enable: {{count}}",
+      "extra": "You have mods the host does not have: {{count}}",
+      "rejected": "Skipped unsafe or oversized files: {{count}}",
+      "relayed": "The connection goes through a relay server, so only files up to 1 MB (configs and scripts) come from the host. Mods and packs will have to be taken from the host manually.",
+      "reviewHint": "Mods are looked up on Modrinth and CurseForge first. Files from the host go to a temporary folder and are checked before installation.",
+      "download": "Download and check",
+      "continue": "Continue",
+      "fromPlatforms": "From Modrinth and CurseForge: {{count}}, verified by hash",
+      "fromHost": "Mods from the host that are not on any platform: {{count}}",
+      "configsReceived": "Configs from the host: {{count}}",
+      "blockedByRelay": "Not transferred through the relay: {{count}}. Get them from the host manually.",
+      "failed": "Could not receive: {{count}}",
+      "issue": {
+        "invalid_archive": "Broken archive",
+        "executable": "Executable files",
+        "native_code": "Native code",
+        "no_mod_metadata": "Does not look like a mod"
+      },
+      "blocked": "Some files are blocked, installation is not possible.",
+      "disableExtras": "Disable my mods the host does not have ({{count}})",
+      "trust": "I trust the room host. Mods and scripts are programs, and the check does not guarantee they are safe.",
+      "apply": "Install",
+      "done": "Done. Mods: {{mods}}, packs: {{packs}}, pack files: {{assets}}, configs: {{configs}}, scripts: {{scripts}}, mods disabled: {{disabled}}, enabled: {{enabled}}, scripts removed: {{removedScripts}}.",
+      "rollbackHint": "Previous mods can be restored with \"Roll back update\" in the instance, previous configs in the config editor history."
+    },
+    "subtitleSignedIn": "Play with friends in one world with no network setup or port forwarding.",
+    "create": "Create room",
+    "createModalTitle": "New room",
+    "createModalSubtitle": "Name, game and access",
+    "refresh": "Refresh",
+    "join": "Join",
+    "joinIdPlaceholder": "Room name or ID…",
+    "joinPasswordPlaceholder": "Password (private rooms)",
+    "joinHint": "Public rooms: name is enough. Private: name + password, or password only.",
+    "yourRooms": "Your rooms",
+    "friendsRooms": "Friends",
+    "authGateTitle": "Sign in",
+    "authGateBody": "Rooms need a sign-in from the Accounts tab.",
+    "emptyTitle": "No rooms yet",
+    "emptyBody": "Create a room or join by name - friends will be able to join you.",
+    "noFriendsRooms": "No friends are hosting a room right now.",
+    "creating": "Creating…",
+    "joining": "Joining…",
+    "youOwner": "Owner",
+    "youMember": "Member",
+    "ownedBy": "Host: {{nick}}",
+    "players": "{{count}} / {{max}}",
+    "joinFriendRoom": "Join",
+    "backToList": "Back to rooms",
+    "idCopied": "Room ID copied",
+    "connectAddressCopied": "Connection address copied",
+    "connectAddressHint": "Click to copy. In-game: Multiplayer → Direct Connect",
+    "roomNameLabel": "Name",
+    "roomNamePlaceholder": "For example, Survival with friends",
+    "loaderLabel": "Loader",
+    "versionLabel": "Version",
+    "gameMetaUnknown": "Version not set",
+    "loader": {
+      "vanilla": "Vanilla",
+      "fabric": "Fabric",
+      "quilt": "Quilt",
+      "forge": "Forge",
+      "neoforge": "NeoForge"
+    },
+    "visibilityLabel": "Who can join",
+    "maxPlayersLabel": "Max players",
+    "publicHint": "Friends will see the room in their list and can join.",
+    "privateHint": "Hidden from friends' lists. Join by name and password, or by invite.",
+    "passwordLabel": "Password",
+    "passwordPlaceholder": "At least 4 characters",
+    "passwordCopied": "Room password copied",
+    "membersTitle": "Members",
+    "inviteTitle": "Invite",
+    "inviteEmpty": "All friends are already in the room - or add more on the Friends tab.",
+    "close": "Close room",
+    "leave": "Leave room",
+    "kick": "Kick",
+    "invite": "Invite",
+    "inviteNicknamePlaceholder": "Friend's nickname",
+    "mcOnlineMicrosoft": "Microsoft",
+    "mcOnlineEly": "Ely",
+    "mcOffline": "offline",
+    "mcOfflineHint": "Sign in with Microsoft or Ely to join a friend's world.",
+    "joinClosedReason": "This room is closed, so you can't join it.",
+    "auto": {
+      "fromProfile": "From profile “{{name}}”",
+      "fromMenu": "From the main menu",
+      "manual": "Change manually",
+      "useAuto": "Choose automatically",
+      "none": "No profile selected. Pick a version manually or in the main menu."
+    },
+    "p2pReady": "ready",
+    "p2pConnecting": "connecting…",
+    "p2pReconnecting": "reconnecting…",
+    "p2pWaiting": "waiting for player",
+    "p2pPeerOffline": "peer not in launcher",
+    "p2pReconnect": "Reconnect",
+    "p2pReconnectToast": "Reconnecting…",
+    "memberOffline": "not in launcher",
+    "joinWorld": "Join world",
+    "joinWorldLaunching": "Tunnel {{address}} is ready, launching the game…",
+    "joinWorldLaunched": "The game is connecting to {{address}}. Keep the launcher open: the tunnel runs inside it.",
+    "joinWorldInGameCopied": "Address {{address}} copied. In-game: Multiplayer → Direct Connect.",
+    "joinWorldInGame": "Tunnel ready: {{address}}. In-game: Multiplayer → Direct Connect.",
+    "waitForPeer": "Invite a friend - the link appears when they join.",
+    "needP2p": "Wait until the link with your friend is ready",
+    "peerLauncherOutdated": "Your friend is on an older launcher version — both of you need to update, otherwise joining the world won't work.",
+    "hostNotFound": "Room host not found",
+    "joinOfflineBlocked": "You can't join a friend's world in offline mode. Sign in with Microsoft or Ely on the Accounts tab.",
+    "p2pChannelClosed": "The connection to your friend dropped. Wait for it to reconnect and try again.",
+    "visibility": {
+      "public": "public",
+      "private": "private",
+      "unknown": "unknown visibility"
+    },
+    "sessionPlaytimeLabel": "Session",
+    "sessionPlaytimeHours": "{{h}} h {{m}} min",
+    "sessionPlaytimeMinutes": "{{m}} min {{s}} sec",
+    "sessionPlaytimeSeconds": "{{s}} sec",
+    "status": {
+      "open": "open",
+      "full": "full",
+      "closed": "closed"
+    },
+    "role": {
+      "owner": "owner",
+      "member": "member"
+    },
+    "toast": {
+      "modpackRequired": "Select an instance for the room.",
+      "signInFirst": "Sign in first in the Accounts tab",
+      "created": "Room created",
+      "joined": "Joined the room",
+      "left": "Left the room",
+      "closed": "Room closed",
+      "invited": "Player invited",
+      "kicked": "Member kicked",
+      "cannotInviteSelf": "You cannot invite yourself",
+      "passwordRequired": "Private rooms need a password (4–32 chars: letters, digits, - and _)",
+      "versionRequired": "Pick a Minecraft version for the room",
+      "versionApplied": "Room version: {{version}} - switched in Play",
+      "settingsSaved": "Room settings saved"
+    },
+    "title": "Rooms",
+    "friendRoomsTitle": "Friends' rooms",
+    "activeRoom": "You are in “{{name}}”",
+    "backToRoom": "Back to room",
+    "closeHoldHint": "Hold to close the room for everyone",
+    "visibilityOption": {
+      "public": "Friends and by name",
+      "private": "Password only"
+    },
+    "world": {
+      "openTitle": "World is open",
+      "noResponseTitle": "World is not responding",
+      "noResponseBody": "The port is open but the game does not respond. Check that the world is still open and the game has not frozen.",
+      "noGameTitle": "Game is not running",
+      "noGameBody": "Start the game and open your world to LAN. The launcher finds the port on its own.",
+      "waitLanTitle": "Open your world to LAN",
+      "waitLanBody": "In the game press Esc, then “Open to LAN” and “Start LAN World”. The launcher picks up the port right away.",
+      "connectingTitle": "Connecting to the host",
+      "connectingBody": "This usually takes a few seconds.",
+      "hostOfflineTitle": "Host is not in the launcher",
+      "hostOfflineBody": "The world becomes available when the host opens the launcher again.",
+      "hostClosedTitle": "Host has not opened the world yet",
+      "hostClosedBody": "The join button activates as soon as the world opens.",
+      "statusUnknownTitle": "World status is unknown",
+      "statusUnknownBody": "The host seems to use an older launcher. Try joining once they open the world.",
+      "launch": "Start game",
+      "launching": "Starting…",
+      "joinFromRunningGame": "Copy address",
+      "joinUnavailable": "You can join once the host opens the world.",
+      "playersNow": "In the world now: {{names}}",
+      "manualPortLabel": "Manual world port",
+      "manualPortPlaceholder": "e.g. 51234",
+      "manualPortApply": "Apply",
+      "manualPortReset": "Detect automatically",
+      "manualPortHint": "If the launcher can't find the port, enter the number from the game chat. It appears after you open the world to LAN.",
+      "manualPortActive": "Using manually set port {{port}}.",
+      "manualPortApplied": "Port {{port}} connected",
+      "manualPortNoAnswer": "Port {{port}} saved, but the game does not respond on it. Check the number.",
+      "manualPortCleared": "The launcher is detecting the port again"
+    },
+    "pingValue": "{{ms}} ms",
+    "pingUnknown": "—",
+    "pingToHost": "ping to host",
+    "pingWorst": "highest guest ping",
+    "linkDirect": "direct",
+    "linkRelay": "via relay",
+    "factVersion": "Version",
+    "factPlayers": "In the world",
+    "factPort": "Port",
+    "factAddress": "Address",
+    "factLink": "Connection",
+    "factSession": "Session",
+    "factAccount": "Minecraft account",
+    "versionMismatch": "The world runs {{world}}, but you selected {{yours}}. You will not be able to connect.",
+    "settingsTitle": "Room settings",
+    "settingsShow": "Edit",
+    "settingsHide": "Hide",
+    "settingsSave": "Save",
+    "accessTitle": "How to join this room",
+    "accessId": "Room ID",
+    "accessCopy": "Copy",
+    "nameCopied": "Room name copied"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "signInFirst": "Sign in to see notifications.",
+    "unread": "Unread: {{count}}",
+    "refresh": "Refresh",
+    "readAll": "Read all",
+    "markRead": "Read",
+    "empty": "No notifications yet.",
+    "friendRequest": "Friend request from {{nick}}",
+    "friendAccept": "{{nick}} accepted your friend request",
+    "roomInvite": "{{nick}} invited you to a room",
+    "achievement": "Achievement: {{title}}",
+    "system": "System notification",
+    "filterAll": "All",
+    "filterUnread": "Unread",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "emptyUnread": "All notifications are read.",
+    "allRead": "All caught up"
+  },
+  "achievements": {
+    "title": "Achievements",
+    "signInFirst": "Sign in to your platform account to view achievements.",
+    "refresh": "Refresh",
+    "empty": "No achievements yet.",
+    "locked": "Locked",
+    "progress": "{{unlocked}} / {{total}} unlocked",
+    "unlockedAt": "Unlocked {{date}}",
+    "items": {
+      "welcome": {
+        "title": "Welcome aboard",
+        "description": "Create your 16Launcher platform account."
+      },
+      "identity_linked": {
+        "title": "Identity confirmed",
+        "description": "Link an Ely.by or Microsoft Minecraft account."
+      },
+      "first_friend": {
+        "title": "Making friends",
+        "description": "Add your first friend on 16Launcher."
+      },
+      "first_launch": {
+        "title": "Into the world",
+        "description": "Launch Minecraft from 16Launcher for the first time."
+      },
+      "ten_launches": {
+        "title": "Regular",
+        "description": "Launch the game 10 times."
+      },
+      "fifty_launches": {
+        "title": "Can't stop",
+        "description": "Launch the game 50 times."
+      },
+      "hour_played": {
+        "title": "Time flies",
+        "description": "Play for a total of 1 hour."
+      },
+      "ten_hours": {
+        "title": "Dedicated",
+        "description": "Play for a total of 10 hours."
+      },
+      "first_room": {
+        "title": "Host",
+        "description": "Create your first room."
+      },
+      "first_join": {
+        "title": "Guest",
+        "description": "Join someone else's room."
+      },
+      "room_invite": {
+        "title": "Come over",
+        "description": "Invite a friend to a room."
+      },
+      "theme_submit": {
+        "title": "Stylist",
+        "description": "Submit a custom launcher theme."
+      },
+      "dragon_1": {
+        "title": "End of the End",
+        "description": "Defeat the Ender Dragon."
+      },
+      "dragon_3": {
+        "title": "Return visit",
+        "description": "Defeat the Ender Dragon 3 times."
+      },
+      "dragon_10": {
+        "title": "Dragon farm",
+        "description": "Defeat the Ender Dragon 10 times."
+      },
+      "dragon_25": {
+        "title": "Master of the End",
+        "description": "Defeat the Ender Dragon 25 times."
+      },
+      "dragon_egg": {
+        "title": "Egg on the shelf",
+        "description": "Pick up the dragon egg."
+      },
+      "hardcore_dragon": {
+        "title": "In one breath",
+        "description": "Defeat the Ender Dragon in a hardcore world."
+      },
+      "wither_1": {
+        "title": "Three skulls",
+        "description": "Defeat the Wither."
+      },
+      "wither_5": {
+        "title": "Stardust",
+        "description": "Defeat the Wither 5 times."
+      },
+      "warden_1": {
+        "title": "Keep it down",
+        "description": "Defeat the Warden."
+      },
+      "boss_trio": {
+        "title": "The big three",
+        "description": "Defeat the Ender Dragon, the Wither and the Warden."
+      },
+      "elder_guardian_3": {
+        "title": "Drained",
+        "description": "Defeat 3 elder guardians."
+      },
+      "ravager_15": {
+        "title": "By the horns",
+        "description": "Defeat 15 ravagers."
+      },
+      "breeze_30": {
+        "title": "Against the wind",
+        "description": "Defeat 30 breezes."
+      },
+      "creeper_500": {
+        "title": "Boom cancelled",
+        "description": "Defeat 500 creepers."
+      },
+      "enderman_200": {
+        "title": "Don't look them in the eye",
+        "description": "Defeat 200 endermen."
+      },
+      "phantom_100": {
+        "title": "Insomnia",
+        "description": "Defeat 100 phantoms."
+      },
+      "totem_10": {
+        "title": "Second chance",
+        "description": "Get saved by a totem of undying 10 times."
+      },
+      "shield_10k": {
+        "title": "Solid defence",
+        "description": "Block 10,000 damage with a shield."
+      },
+      "damage_100k": {
+        "title": "Heavy hand",
+        "description": "Deal 100,000 damage."
+      },
+      "killed_by_creeper_10": {
+        "title": "Surprise!",
+        "description": "Get blown up by a creeper 10 times."
+      },
+      "killed_by_dragon": {
+        "title": "Fire-breathing argument",
+        "description": "Get killed by the Ender Dragon."
+      },
+      "killed_by_warden": {
+        "title": "Too loud",
+        "description": "Get killed by the Warden."
+      },
+      "deaths_300": {
+        "title": "Respawn on autopilot",
+        "description": "Die 300 times."
+      },
+      "no_death_day": {
+        "title": "Not a scratch",
+        "description": "Survive 24 hours of playtime without dying."
+      },
+      "fall_1km": {
+        "title": "Free fall",
+        "description": "Fall a total of 1 km."
+      },
+      "cake_100": {
+        "title": "Sweet tooth",
+        "description": "Eat 100 slices of cake."
+      },
+      "diamond_200": {
+        "title": "Glint in the deep",
+        "description": "Mine 200 diamond ore."
+      },
+      "emerald_50": {
+        "title": "Emerald city",
+        "description": "Mine 50 emerald ore."
+      },
+      "debris_32": {
+        "title": "Ash and debris",
+        "description": "Mine 32 ancient debris."
+      },
+      "amethyst_256": {
+        "title": "Amethyst vein",
+        "description": "Mine 256 amethyst clusters."
+      },
+      "blocks_50k": {
+        "title": "The pickaxe never cools",
+        "description": "Mine 50,000 blocks."
+      },
+      "pickaxes_25": {
+        "title": "Consumable",
+        "description": "Wear out 25 pickaxes."
+      },
+      "netherite_broken": {
+        "title": "Pricey habit",
+        "description": "Wear out a netherite pickaxe."
+      },
+      "walk_25km": {
+        "title": "Worn-out boots",
+        "description": "Walk and run 25 km."
+      },
+      "walk_250km": {
+        "title": "The edge of the map is near",
+        "description": "Walk and run 250 km."
+      },
+      "elytra_100km": {
+        "title": "Wind in your ears",
+        "description": "Fly 100 km with elytra."
+      },
+      "boat_20km": {
+        "title": "Captain",
+        "description": "Sail 20 km by boat."
+      },
+      "minecart_10km": {
+        "title": "Narrow gauge",
+        "description": "Ride 10 km in a minecart."
+      },
+      "swim_10km": {
+        "title": "Waterfowl",
+        "description": "Swim 10 km."
+      },
+      "strider_1km": {
+        "title": "Walking on lava",
+        "description": "Ride a strider for 1 km."
+      },
+      "pig_1km": {
+        "title": "Racing pig",
+        "description": "Ride a pig for 1 km."
+      },
+      "all_biomes": {
+        "title": "Globe in your head",
+        "description": "Complete the vanilla \"Adventuring Time\" advancement."
+      },
+      "trades_300": {
+        "title": "Emerald exchange",
+        "description": "Trade with villagers 300 times."
+      },
+      "raids_5": {
+        "title": "Militia",
+        "description": "Win 5 raids."
+      },
+      "bred_200": {
+        "title": "Ark",
+        "description": "Breed 200 animals."
+      },
+      "fish_250": {
+        "title": "Got a bite!",
+        "description": "Catch 250 fish."
+      },
+      "enchant_100": {
+        "title": "Bookworm",
+        "description": "Enchant 100 items."
+      },
+      "beacon": {
+        "title": "Light in the night",
+        "description": "Craft a beacon."
+      },
+      "noteblock_1000": {
+        "title": "Orchestra",
+        "description": "Play a note block 1,000 times."
+      },
+      "records_10": {
+        "title": "DJ",
+        "description": "Play 10 music discs."
+      },
+      "bell_100": {
+        "title": "Bell ringer",
+        "description": "Ring a bell 100 times."
+      },
+      "chests_1000": {
+        "title": "It was here somewhere",
+        "description": "Open chests 1,000 times."
+      },
+      "flowers_50": {
+        "title": "Windowsill",
+        "description": "Pot 50 plants."
+      }
+    },
+    "filterAll": "All",
+    "filterUnlocked": "Unlocked",
+    "filterLocked": "Locked",
+    "unlockedNoDate": "Unlocked",
+    "noneInFilter": "Nothing here yet.",
+    "progressLaunches": "{{current}} / {{target}} launches",
+    "progressPlaytime": "{{current}} / {{target}} h",
+    "progressCount": "{{current}} / {{target}}",
+    "progressDistance": "{{current}} / {{target}} km",
+    "category": {
+      "profile": "Profile",
+      "game": "Game",
+      "social": "Community",
+      "bosses": "Bosses & combat",
+      "survival": "Survival",
+      "mining": "Mining",
+      "travel": "Travel",
+      "village": "Village & home",
+      "other": "Other"
+    }
+  },
+  "platform": {
+    "accountTitle": "16Launcher account",
+    "accountManagement": "Account management",
+    "signIn": "Sign in",
+    "signUp": "Sign up",
+    "emailLabel": "Email",
+    "emailOrNicknameLabel": "Email / Nickname",
+    "nicknameLabel": "Nickname",
+    "passwordLabel": "Password",
+    "passwordPlaceholder": "Password",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "createAccount": "Create account",
+    "privacyPolicyLink": "Privacy Policy",
+    "privacyConsent": "I have read the {{link}} and consent to the processing of personal data.",
+    "privacyLoginNotice": "By signing in, you confirm that you have read the {{link}}.",
+    "next": "Next",
+    "back": "Back",
+    "verificationStepLabel": "Step 2 of 2",
+    "verificationTitle": "Confirm your email",
+    "verificationHint": "We sent a code to {{email}}. Enter it below to finish registration.",
+    "emailSpamHint": "If you don't see the email in your inbox, check your spam folder.",
+    "launcherNickname": "Launcher nickname",
+    "inGameNickname": "In-game nickname",
+    "newNicknamePlaceholder": "New nickname",
+    "changeNickname": "Change nickname",
+    "logout": "Log out",
+    "dangerZone": "Danger zone",
+    "deleteAccount": "Delete account",
+    "deleteAccountConfirm": "Delete permanently",
+    "deleteAccountHint": "Your 16Launcher account and related server data will be permanently deleted. Your current password is required.",
+    "linked": "Linked",
+    "linking": "Linking…",
+    "link": "Link",
+    "enterEmail": "Enter email",
+    "enterNicknameOrEmail": "Enter nickname or email",
+    "enterNickname": "Enter nickname",
+    "verificationCodeLabel": "Verification code",
+    "enterVerificationCode": "000000",
+    "sendVerificationCode": "Send code to email",
+    "resendVerificationCode": "Resend code",
+    "linkMicrosoftTitle": "Sign in with Microsoft, then click Link again",
+    "linkElyTitle": "Sign in with Ely.by, then click Link again",
+    "orDivider": "or",
+    "continueWithDiscord": "Continue with Discord",
+    "authHintLogin": "16Launcher sign-in - for friends and rooms.",
+    "authHintSignup": "Create a 16Launcher account.",
+    "reset": {
+      "forgotLink": "Forgot password?",
+      "title": "Reset password",
+      "authHint": "Recover access to your 16Launcher account.",
+      "requestHint": "Enter your account email and we'll send you a password reset code.",
+      "confirmHint": "If {{email}} is registered, a code has been sent to it. Enter it and choose a new password.",
+      "newPasswordLabel": "New password",
+      "newPasswordPlaceholder": "New password (at least 8 characters)",
+      "submit": "Save password"
+    },
+    "changePassword": {
+      "title": "Password",
+      "hint": "Changing your password signs out all other devices.",
+      "open": "Change password",
+      "currentPlaceholder": "Current password"
+    },
+    "toast": {
+      "accountCreated": "Account created",
+      "signedIn": "Signed in",
+      "loggedOut": "You have logged out",
+      "signInFirst": "Sign in first.",
+      "enterNewNickname": "Enter a new nickname.",
+      "nicknameTooShort": "Nickname must be at least 3 characters.",
+      "nicknameAlreadySet": "This nickname is already set.",
+      "nicknameUpdated": "Nickname updated.",
+      "sessionExpired": "16Launcher session expired. Sign in again.",
+      "signInMicrosoftThenLink": "Sign in with Microsoft, then click Link again.",
+      "signInElyThenLink": "Sign in with Ely.by, then click Link again.",
+      "minecraftLinked": "Minecraft linked to account",
+      "elyLinked": "Ely.by linked to account",
+      "enterEmailSignup": "Enter email for registration.",
+      "enterSignupNickname": "Enter a nickname for registration.",
+      "enterPassword": "Enter password",
+      "passwordTooShort": "Password must be at least 8 characters.",
+      "enterVerificationCode": "Enter the code from the email.",
+      "verificationCodeSent": "Verification code sent to your email.",
+      "accountDeleted": "Account deleted.",
+      "acceptPrivacy": "To create an account, please accept the Privacy Policy.",
+      "enterEmailReset": "Enter your account email.",
+      "resetCodeSent": "If this email is registered, we've sent a code to it.",
+      "passwordReset": "Password changed, you're signed in.",
+      "enterCurrentPassword": "Enter your current password.",
+      "passwordChanged": "Password changed. Other devices have been signed out."
+    },
+    "errors": {
+      "connectionFailed": "Cannot connect to the 16Launcher server. Check your internet connection and API availability.",
+      "invalidCredentials": "Invalid login or password.",
+      "invalidPassword": "Invalid password.",
+      "passwordTooShort": "Password is too short. Minimum 8 characters.",
+      "emailTaken": "This email is already registered.",
+      "nicknameTaken": "This nickname is already taken.",
+      "invalidVerificationCode": "Invalid verification code.",
+      "verificationCodeExpired": "Verification code expired. Request a new one.",
+      "tooManyVerificationAttempts": "Too many attempts. Request a new code.",
+      "rateLimited": "Too many requests. Please wait a moment.",
+      "emailSendFailed": "Failed to send the verification email.",
+      "deleteNotAvailable": "Account deletion is not available on the server yet. API deploy is required.",
+      "identityAlreadyLinked": "{{provider}} is already linked to another 16Launcher account.",
+      "discordNotConfigured": "Discord sign-in is not configured on the server yet.",
+      "discordFailed": "Discord sign-in failed. Please try again.",
+      "invalidCurrentPassword": "Current password is incorrect.",
+      "passwordNotSet": "This account has no password yet. Sign out and set one via \"Forgot password?\" on the sign-in screen.",
+      "samePassword": "The new password must differ from the current one.",
+      "serverOutdated": "The 16Launcher server doesn't support this yet. Please try again later."
+    },
+    "settings": {
+      "online": "Online",
+      "nicknameHint": "At least 3 characters. Friends and room members see this name.",
+      "gameNicknameHint": "Taken from the active Minecraft account.",
+      "linkedTitle": "Linked accounts",
+      "linkedHint": "Linking confirms the game account belongs to you.",
+      "notLinked": "Not linked",
+      "linkedAs": "Linked: {{name}}",
+      "sessionTitle": "Session",
+      "sessionHint": "Sign out of 16Launcher on this device. Your Minecraft accounts stay in the launcher."
+    }
+  },
+  "app": {
+    "launchStage": {
+      "version": "Checking version…",
+      "libraries": "Checking libraries…",
+      "assets": "Checking game assets…",
+      "account": "Checking account…",
+      "java": "Preparing Java…",
+      "starting": "Starting the game…"
+    },
+    "preflight": {
+      "title": "Before you launch",
+      "confirm": "Launch anyway",
+      "footer": "You can turn this check off in the game settings.",
+      "disk_low": "{{free}} GB left on the disk. The game may fail to start or fail to save your world.",
+      "memory_over_total": "The game is allocated {{heap}} GB, but the launcher will limit it to {{limit}} GB at launch to leave memory for the system.",
+      "memory_low_available": "The game is allocated {{heap}} GB, but only {{available}} GB is free. Close other programs or lower the memory.",
+      "memory_low_for_mods": "Mods in this instance: {{mods}}, allocated memory: {{heap}} GB. At least {{recommended}} GB is recommended.",
+      "java_missing": "The selected Java was not found: {{path}}. The bundled one will be used.",
+      "java_too_old": "Java {{required}} is required, but Java {{actual}} is selected. The game will not start: change Java in the settings.",
+      "java_newer": "This version needs Java {{required}}, but Java {{actual}} is selected. The loader or mods may not work.",
+      "conflicts": "Mod conflicts: {{count}}",
+      "conflictsMore": "– and {{count}} more"
+    },
+    "launchActions": {
+      "retry": "Retry"
+    },
+    "sidebar": {
+      "collapse": "Collapse sidebar",
+      "expand": "Expand sidebar",
+      "play": "Play",
+      "settings": "Settings",
+      "mods": "Mods",
+      "modpacks": "Modpacks",
+      "friends": "Friends",
+      "rooms": "Rooms"
+    },
+    "hotkeys": {
+      "title": "Keyboard shortcuts",
+      "subtitle": "Active when no dialog is open and no input is focused.",
+      "groups": {
+        "navigation": "Navigation",
+        "play": "Game",
+        "content": "Builds and content",
+        "general": "General"
+      },
+      "items": {
+        "tabs": "Sidebar tabs in order",
+        "cycleTabs": "Next / previous tab",
+        "history": "Back / forward in history",
+        "settings": "Open settings",
+        "sidebar": "Collapse or expand the sidebar",
+        "back": "Return to the builds list",
+        "launch": "Launch the selected build",
+        "stop": "Stop the game",
+        "copyConsole": "Copy console",
+        "detachConsole": "Detach console",
+        "create": "Create a build",
+        "import": "Import a build",
+        "screenshots": "Open build screenshots",
+        "search": "Jump to search",
+        "refresh": "Refresh the list",
+        "help": "Show keyboard shortcuts"
+      }
+    },
+    "splitView": {
+      "zones": {
+        "left": "Left",
+        "right": "Right",
+        "top": "Top",
+        "bottom": "Bottom",
+        "center": "Full screen"
+      },
+      "closePane": "Remove this pane",
+      "tooNarrow": "Window is too narrow for dual panes. Widen the window.",
+      "tooNarrowBanner": "Dual panes are hidden while the window is under 960px. Widen it to restore the split.",
+      "dragHint": "{{tab}} - drag to a window edge for a second pane",
+      "dragSidebarHint": "Split: drag a sidebar tab to the edge of the work area"
+    },
+    "launcherVersionTitle": "Launcher version {{version}}",
+    "sessionNotifications": {
+      "title": "Launcher notifications",
+      "heading": "Notifications",
+      "empty": "No notifications this session yet",
+      "clear": "Clear",
+      "kindInfo": "Info",
+      "kindSuccess": "Success",
+      "kindError": "Error",
+      "kindWarning": "Warning",
+      "kindSystem": "System",
+      "groupBadge": "×{{count}}",
+      "groupHint": "Repeated {{count}} times - grouped"
+    },
+    "accounts": {
+      "managerTitle": "Account manager",
+      "managerSubtitle": "",
+      "currentProfileSection": "Active account",
+      "addAccount": "Add account",
+      "sidebarTooltip": "Accounts",
+      "offlineBadge": "offline",
+      "switcherTitle": "Switch account",
+      "switcherHeading": "Accounts",
+      "manageAll": "All accounts & sign-in…",
+      "activeBadge": "active",
+      "kindMicrosoft": "Microsoft",
+      "kindEly": "Ely.by",
+      "kindOffline": "Offline",
+      "savedListTitle": "Saved accounts",
+      "savedListHint": "",
+      "savedListHintShort": "Switch between saved Minecraft profiles.",
+      "removeTitle": "Remove from launcher",
+      "removeConfirm": "Remove this account from the list? Saved credentials for it will be deleted.",
+      "accountSettingsTitle": "Account settings",
+      "settingsSubtitle": "Minecraft accounts, platform, and notifications",
+      "settingsTabAccounts": "Accounts",
+      "settingsTabPlatform": "Platform",
+      "settingsTabNotifications": "Notifications",
+      "providerSignIn": "Minecraft sign-in",
+      "editNickname": "Edit nickname",
+      "nicknamePlaceholder": "Player",
+      "nicknameRules": "Only Latin letters, digits and _ (up to 16 characters).",
+      "systemNicknameSignedOut": "Not signed in to 16Launcher",
+      "signedInAsPrefix": "Signed in as: ",
+      "hint": "Configure your profile and appearance after you sign in.",
+      "linkedShort": "Linked",
+      "addShort": "Add",
+      "emptyList": "No saved accounts yet.",
+      "settingsSubtitleShort": "Platform account and notifications",
+      "microsoftSignIn": "Sign in with Microsoft",
+      "microsoftLogout": "Log out of Microsoft",
+      "elyLogout": "Log out of Ely.by",
+      "elyWaiting": "Waiting for login…",
+      "elyDialogTitle": "If the page in your browser is loading forever:",
+      "elyDialogTip": "It is better to open it in a new tab of the same browser. In another browser Ely.by may show “Invalid request”.",
+      "animation": {
+        "title": "Animation",
+        "idle": "Idle",
+        "walk": "Walk",
+        "run": "Run",
+        "wave": "Wave",
+        "crouch": "Crouch",
+        "fly": "Fly",
+        "look": "Look around"
+      },
+      "cape": {
+        "title": "Cape",
+        "none": "No cape",
+        "empty": "You have no capes on this account.",
+        "loading": "Loading capes…",
+        "error": "Failed to load capes."
+      },
+      "skinByUsername": {
+        "title": "Skin by username",
+        "placeholder": "Steve",
+        "apply": "Apply",
+        "reset": "Reset",
+        "loading": "Loading skin…",
+        "error": "Failed to load skin.",
+        "notFound": "Player not found."
+      },
+      "skinUpload": {
+        "title": "Upload skin",
+        "pick": "Choose PNG",
+        "apply": "Upload",
+        "loading": "Uploading skin…",
+        "error": "Failed to upload skin.",
+        "standard": "Standard",
+        "slim": "Slim"
+      },
+      "subTab": {
+        "overview": "Overview",
+        "skins": "Skins",
+        "wardrobe": "Wardrobe",
+        "achievements": "Achievements",
+        "notifications": "Notifications",
+        "settings": "Settings"
+      },
+      "skinLibrary": {
+        "title": "Skin library",
+        "empty": "You have no saved skins on this account.",
+        "loading": "Loading skins…",
+        "error": "Failed to load skin library.",
+        "apply": "Apply skin",
+        "active": "Active",
+        "previewHint": "Select a skin to preview it on the right, then apply.",
+        "microsoftOnly": "Skin library is available for Microsoft accounts."
+      },
+      "toast": {
+        "nicknameSaved": "Changes saved!",
+        "nicknameSaveFailed": "Failed to save nickname.",
+        "elyLoggedOut": "You have logged out of Ely.by.",
+        "elyLogoutFailed": "Failed to log out from Ely.by.",
+        "elyOpenBrowserFailed": "Could not open the browser for Ely.by sign-in.",
+        "msLoggedIn": "Signed in with Microsoft.",
+        "msLoginFailed": "Failed to sign in with Microsoft.",
+        "msNoJavaProfile": "This Microsoft account has no Minecraft: Java Edition profile. Make sure you own the game or have an active Game Pass, then create a username on minecraft.net or in the official launcher.",
+        "msOpenBrowserFailed": "Could not open the browser for Microsoft sign-in.",
+        "msLoggedOut": "You have logged out of Microsoft.",
+        "msLogoutFailed": "Failed to log out of Microsoft.",
+        "switched": "Active account changed.",
+        "removed": "Account removed from the list.",
+        "added": "New account created and selected."
+      },
+      "signIn": "Sign in",
+      "elySignIn": "Sign in with Ely.by",
+      "stats": {
+        "playtime": "Playtime",
+        "launches": "Launches",
+        "achievements": "Achievements"
+      },
+      "overview": {
+        "skinLabel": "Skin",
+        "capeLabel": "Cape",
+        "defaultSkin": "Default",
+        "allAchievements": "All",
+        "recentAchievements": "Recently unlocked",
+        "noRecent": "Nothing unlocked yet.",
+        "nextAchievements": "Next goals",
+        "allNotifications": "All",
+        "signedOutTitle": "Sign in to 16Launcher",
+        "signedOutBody": "A 16Launcher account unlocks the launcher's social features."
+      },
+      "wardrobe": {
+        "title": "Wardrobe",
+        "subtitle": "Click a skin or cape to try it on, then apply.",
+        "skins": "Skins",
+        "capes": "Capes",
+        "pendingTitle": "Try-on not saved",
+        "apply": "Apply",
+        "discard": "Discard",
+        "applied": "Look updated.",
+        "microsoftOnlyBody": "Sign in with Microsoft to change skins and capes right from the launcher.",
+        "elyBody": "Ely.by skins are changed in your account on ely.by.",
+        "openEly": "Open Ely.by",
+        "byNameHint": "The player's skin will be set on your account."
+      }
+    },
+    "toast": {
+      "settingsSaved": "Settings saved!",
+      "downloadStarted": "Download started!",
+      "downloadFinished": "Download finished!",
+      "gameExitedEarly": "The game exited right after launch (code {{code}}). Open the console for details.",
+      "copy": "Copy",
+      "copied": "Copied!"
+    },
+    "downloads": {
+      "openWindow": "Open in a separate window",
+      "windowTitle": "Installations",
+      "emptyTitle": "No active installations",
+      "emptyHint": "Versions, modpacks and mods being downloaded right now will appear here.",
+      "bytesOf": "{{done}} of {{total}}",
+      "filesOf": "{{done}} of {{total}} files",
+      "speed": "{{value}}/s",
+      "eta": "{{time}} left",
+      "etaSeconds": "~{{n}} s",
+      "etaMinutes": "~{{n}} min",
+      "etaHours": "~{{h}} h {{m}} min",
+      "paused": "paused",
+      "preparing": "preparing…",
+      "kind": {
+        "version": "version",
+        "modpack": "modpack",
+        "mod": "mod",
+        "file": "file"
+      }
+    },
+    "social": {
+      "discord": "Join our Discord!\nChat with the team and share your emotions!",
+      "telegram": "Follow our Telegram!\nGet the latest launcher updates!",
+      "joinButton": "Join",
+      "subscribeButton": "Subscribe",
+      "laterButton": "Later"
+    },
+    "dialog": {
+      "imagesFilterName": "Images"
+    },
+    "help": {
+      "paletteHint": "{{keys}} opens quick search: instances, installed mods, the Modrinth and CurseForge catalogs, settings and actions.",
+      "title": "About Launcher",
+      "mainInfo": "16Launcher is a free Minecraft launcher with support for Fabric, Forge, Quilt, NeoForge.",
+      "icons": "Icons from",
+      "mojangDisclaimer": "NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.\n\n16Launcher is in no way affiliated with Mojang Studios, nor should it be considered a project endorsed by Mojang Studios.",
+      "apis": "We use Modrinth, CurseForge and Ely.by APIs",
+      "reportBug": "Found an error?",
+      "close": "Close"
+    },
+    "playAction": {
+      "play": "PLAY",
+      "launching": "Launching...",
+      "install": "Install",
+      "stop": "STOP"
+    },
+    "errors": {
+      "openFolderFailed": "Failed to open folder: {{msg}}",
+      "forgeVersionsLoadFailed": "Failed to load Forge versions. Check access to files.minecraftforge.net: {{msg}}",
+      "neoforgeVersionsLoadFailed": "Failed to load NeoForge versions: {{msg}}",
+      "versionsLoadFailed": "Failed to load versions list: {{msg}}",
+      "launchError": "Launch error: {{msg}}",
+      "installError": "Installation error: {{msg}}",
+      "stopError": "Stop error: {{msg}}"
+    },
+    "warnings": {
+      "selectProfileFirst": "Select a profile first, then click “Play”.",
+      "needMinecraftVersion": "Select a Minecraft version on the Play tab first.",
+      "needInstalledVersion": "Install the selected version on the Play tab first.",
+      "closeGameFirst": "Close the running game first."
+    },
+    "discord": {
+      "play": "In the main menu",
+      "settings": "Configuring the launcher",
+      "mods": "Selecting a mod",
+      "modpacks": "Selecting a profile",
+      "friends": "Viewing friends",
+      "rooms": "In rooms",
+      "accounts": "Managing account",
+      "playing": "Playing:"
+    },
+    "pinnedProfiles": {
+      "forgeNotInstalled": "Forge is not installed for this version.",
+      "neoforgeNotInstalled": "NeoForge is not installed for this version.",
+      "pinLimit": "You can pin up to 3 profiles.",
+      "fabricNotInstalled": "Fabric profile is not installed for this version.",
+      "quiltNotInstalled": "Quilt profile is not installed for this version."
+    },
+    "window": {
+      "minimize": "Minimize",
+      "maximize": "Maximize",
+      "close": "Close"
+    },
+    "versionBadge": {
+      "updateChip": "Update available",
+      "latest": "You have the latest version",
+      "outdatedWithVersion": "New version available: {{version}}",
+      "outdated": "New version available",
+      "unknown": "Update status will be known after a check"
+    },
+    "gameConsole": {
+      "defaultProfileName": "game",
+      "windowTitle": "Console \"{{name}}\""
+    },
+    "install": {
+      "noFabricLoader": "No suitable Fabric Loader for this version",
+      "noNeoForgeLoader": "No suitable NeoForge build for this version",
+      "unknownVersionType": "Unknown version type"
+    }
+  },
+  "onboarding": {
+    "progress": "Step {{current}} of {{total}}",
+    "nav": {
+      "back": "Back",
+      "next": "Next"
+    },
+    "welcome": {
+      "title": "16Launcher",
+      "subtitle": "Choose a language and a color, sign in and bring over your instances from another launcher. Every step can be skipped.",
+      "cta": "Start",
+      "languageLabel": "Interface language"
+    },
+    "appearance": {
+      "title": "Interface color",
+      "subtitle": "It's used for buttons, selected items and download bars. You can change it any time in Settings, under Appearance."
+    },
+    "account": {
+      "title": "Sign in",
+      "subtitle": "Pick a sign-in method or skip - you can sign in later",
+      "elyTitle": "Ely.by",
+      "elyDesc": "For Ely profile and Ely.by skins",
+      "microsoftTitle": "Microsoft",
+      "microsoftDesc": "Official Minecraft / Microsoft account",
+      "skip": "Skip and sign in later"
+    },
+    "ely": {
+      "title": "Sign in with Ely.by",
+      "subtitle": "Enter your Ely credentials or open browser sign-in",
+      "loginLabel": "Login",
+      "loginPlaceholder": "Ely.by username",
+      "passwordLabel": "Password",
+      "passwordPlaceholder": "Password",
+      "securityHint": "Login and password stay on this PC.",
+      "submit": "Sign in",
+      "oauth": "Sign in via browser (OAuth)",
+      "success": "Signed in successfully!",
+      "errorGeneric": "Sign-in failed. Check your login and password."
+    },
+    "microsoft": {
+      "title": "Sign in with Microsoft",
+      "subtitle": "Use your official Minecraft account. After clicking the button, Microsoft authorization will open.",
+      "externalHint": "Sign-in opens in your browser.",
+      "cta": "Continue with Microsoft",
+      "waiting": "Waiting for sign-in…",
+      "success": "Microsoft sign-in complete!",
+      "errorGeneric": "Could not start Microsoft sign-in.",
+      "copyLink": "Copy link",
+      "linkHint": "Page didn't open? Copy the link and open it in your browser."
+    },
+    "import": {
+      "title": "Move your instances",
+      "subtitle": "Looking for instances in Prism, MultiMC, CurseForge, ATLauncher and GDLauncher.",
+      "launcher": "Launcher",
+      "launcherAuto": "Auto (all launchers)",
+      "path": "Launcher path",
+      "pathPlaceholder": "e.g. …\\AppData\\Roaming\\PrismLauncher",
+      "pathHint": "Launcher root or the instances / Instances folder",
+      "browse": "Choose folder",
+      "scan": "Find instances",
+      "scanning": "Searching…",
+      "emptyTitle": "No instances found",
+      "emptyHint": "If your instances are in a custom folder, choose it manually. You can also do this later in Builds → Import.",
+      "cta": "Move ({{count}})",
+      "skip": "Skip",
+      "continue": "Continue",
+      "progress": "{{current}}/{{total}} · {{name}}",
+      "errorGeneric": "Could not import the instance",
+      "scanFailed": "Could not scan that path",
+      "unknownLauncher": "Other launcher",
+      "foundTitle": "Found {{count}} instances",
+      "foundHint": "Select the ones you want to move.",
+      "selectAll": "Select all",
+      "selectNone": "Clear selection",
+      "selectedCount": "Selected: {{count}} of {{total}}",
+      "manual": "Choose a folder manually",
+      "manualHide": "Hide",
+      "importing": "Moving instances…",
+      "resultTitle": "Moved {{done}} of {{total}}",
+      "resultFailed": "Couldn't move:"
+    },
+    "finish": {
+      "title": "Ready to play",
+      "subtitle": "Basic setup is done. You can open the interface tour later from Help.",
+      "ctaPlay": "Start playing",
+      "ctaTour": "Show tour",
+      "summaryLanguage": "Language",
+      "summaryColor": "Color",
+      "summaryAccount": "Account",
+      "accountLater": "Add later"
+    },
+    "errors": {
+      "loginFailed": "Couldn't sign in",
+      "hintNetwork": "Can't reach the server. Check your internet, VPN or proxy and try again.",
+      "hintTimeout": "Sign-in didn't finish in time. Complete the authorization in your browser and try again.",
+      "hintCredentials": "Check your username and password. If two-factor authentication is on, sign in through the browser.",
+      "hintOther": "Try again. If it keeps failing, skip this step: you can add an account later in the Accounts tab."
+    }
+  },
+  "productTour": {
+    "progress": "Step {{current}} of {{total}}",
+    "skip": "Skip",
+    "back": "Back",
+    "next": "Next",
+    "finish": "Got it",
+    "replay": "UI overview",
+    "steps": {
+      "command-palette": {
+        "title": "Quick search",
+        "body": "Ctrl+K (⌘K on macOS) opens search across the whole launcher: instances, mods in every instance, the Modrinth and CurseForge catalogs, settings and actions. Works from any tab."
+      },
+      "welcome": {
+        "title": "Launcher UI",
+        "body": "Quick pass over the tabs: launch, mods, instances, account."
+      },
+      "sidebar": {
+        "title": "Sidebar",
+        "body": "Play - launch Minecraft. Settings - Java and appearance. Mods - catalog. Modpacks - your profiles."
+      },
+      "launch-controls": {
+        "title": "Version and launch",
+        "body": "Left: Minecraft version. Right: loader (Vanilla, Fabric, Quilt, Forge, NeoForge). Center: Install or Play."
+      },
+      "profiles": {
+        "title": "Recent instances",
+        "body": "Cards below are recent instances. Click to select; create new ones in the Modpacks tab."
+      },
+      "settings": {
+        "title": "Settings",
+        "body": "Java, memory, JVM args, appearance, and hotkeys."
+      },
+      "mods": {
+        "title": "Mods",
+        "body": "Modrinth and CurseForge. Filter by version and loader; installs go into the selected instance."
+      },
+      "modpacks": {
+        "title": "Modpacks",
+        "body": "One profile per mod set: its own folder, version, loader, and mod list."
+      },
+      "mc-account": {
+        "title": "Minecraft account",
+        "body": "Ely.by or Microsoft - for game login, skins, and multiplayer. Add accounts in the Profile tab."
+      },
+      "platform": {
+        "title": "16Launcher account",
+        "body": "Needed for friends, rooms, and notifications. Sign up or sign in from the Accounts tab."
+      },
+      "finish": {
+        "title": "That's it",
+        "body": "Replay anytime: ? at the top → UI overview."
+      }
+    }
+  },
+  "downloads": {
+    "source": {
+      "label": "Download source",
+      "hint": "Where game files, libraries and loaders come from. In automatic mode the launcher switches to a mirror on its own when the official servers stop responding.",
+      "option": {
+        "auto": "Automatic",
+        "official": "Official only",
+        "mirror": "Mirror first"
+      }
+    }
+  },
+  "crashRules": {
+    "tickingEntity": {
+      "title": "The game crashed while ticking an object in the world",
+      "fix": "A broken entity or block (often from a mod) takes the world down when it loads. Update or disable the mod that owns it; for vanilla objects, restoring the affected chunk from a backup helps."
+    },
+    "serverWatchdog": {
+      "title": "The integrated server hung",
+      "fix": "A single game tick took too long and the watchdog stopped the game. Heavy world-generation mods or huge farms are the usual cause. Give the game more memory and check recently added mods."
+    },
+    "stackOverflow": {
+      "title": "Stack overflow",
+      "fix": "Code ended up calling itself endlessly. Most often two mods keep calling each other. Disable recently added mods one at a time."
+    },
+    "missingRegistries": {
+      "title": "The world contains blocks or items from removed mods",
+      "fix": "The world was saved with mods that are not installed now. Bring those mods back, or confirm removing their content when you join the world (make a backup first)."
+    },
+    "linuxXrandr": {
+      "title": "xrandr not found",
+      "fix": "Older Minecraft versions on Linux need the xrandr tool. Install x11-xserver-utils (Debian/Ubuntu) or xorg-xrandr (Arch)."
+    },
+    "optifineConflict": {
+      "title": "OptiFine conflicts with your mods",
+      "fix": "OptiFine changes game code in a way Mixin mods cannot work with. Disable it and use Sodium + Iris (Fabric/Quilt) or Embeddium + Oculus (Forge/NeoForge)."
+    }
+  },
+  "crashFixes": {
+    "disableMod": "Disable {{mod}}",
+    "installDependency": "Install {{mod}}",
+    "raiseMemory": "Memory {{from}} → {{to}} GB",
+    "resetJava": "Use automatic Java",
+    "applied": "Done: {{action}}",
+    "failed": "Could not apply it, try doing it manually",
+    "gameRunning": "Close the game to apply"
+  },
+  "runHistory": {
+    "nav": "Runs",
+    "title": "Run history",
+    "hint": "The full log of every launch with its exit code and duration. The last 40 runs are kept.",
+    "searchPlaceholder": "Search all logs",
+    "loading": "Loading history…",
+    "loadingLog": "Loading log…",
+    "empty": "No runs yet. Launch the game and its log will show up here.",
+    "emptyLog": "The game printed nothing during this run.",
+    "noHits": "Nothing found",
+    "exitCode": "code {{code}}",
+    "errors": "errors: {{count}}",
+    "summary": "Lines: {{lines}} · memory: {{memory}}",
+    "truncated": "log cut short, it was too large",
+    "showEarlier": "Show {{count}} earlier lines",
+    "copyReport": "Copy report",
+    "reportHint": "System, instance summary and the end of the log. User paths, tokens and IP addresses are hidden.",
+    "reportCopied": "Report copied, paste it into the support chat",
+    "reportFailed": "Could not build the report",
+    "delete": "Delete run",
+    "deleteFailed": "Could not delete the run",
+    "outcome": {
+      "running": "Running",
+      "ok": "Finished",
+      "crashed": "Crashed",
+      "stopped": "Stopped",
+      "interrupted": "Unknown"
+    }
+  },
+  "commandPalette": {
+    "buttonTitle": "Search and commands ({{keys}})",
+    "discoverHint": "Press {{keys}} to quickly find an instance, mod, setting or action",
+    "tryIt": "Try it",
+    "contentDisabled": "disabled",
+    "searching": "Searching…",
+    "searchingCatalog": "Searching Modrinth and CurseForge…",
+    "title": "Command palette",
+    "hotkey": "Command palette",
+    "placeholder": "Instance, mod, tab, setting or action…",
+    "nothing": "Nothing found",
+    "openTab": "Open tab",
+    "openInstance": "Open instance",
+    "playInstance": "Play: {{name}}",
+    "group": {
+      "content": "Installed in instances",
+      "catalog": "Mod catalog",
+      "recent": "Recent",
+      "actions": "Actions",
+      "navigation": "Go to",
+      "instances": "Instances",
+      "settings": "Settings"
+    },
+    "action": {
+      "downloads": "Open installations window",
+      "launch": "Launch the game",
+      "stop": "Stop the game",
+      "create": "Create an instance",
+      "import": "Import an instance",
+      "gameFolder": "Open the game folder",
+      "sidebar": "Collapse or expand the sidebar",
+      "hotkeys": "Keyboard shortcuts"
+    },
+    "footer": {
+      "navigate": "↑↓ select",
+      "run": "Enter run",
+      "close": "Esc close"
+    }
+  },
+  "configEditor": {
+    "nav": "Configs",
+    "title": "Configs",
+    "hint": "Files from config, defaultconfigs and options.txt. Before every save the previous version goes into history.",
+    "searchFiles": "Search file names",
+    "searchContent": "Search file contents",
+    "mode": {
+      "names": "Files",
+      "content": "Contents"
+    },
+    "loading": "Loading…",
+    "noFiles": "No configs yet. They appear after the first launch with mods.",
+    "noHits": "No matches",
+    "pickFile": "Pick a file on the left",
+    "find": "Find in file",
+    "findNothing": "Not found in this file",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Config saved",
+    "revert": "Discard edits",
+    "lossy": "This file is not UTF-8. Some characters may show incorrectly and will change on save.",
+    "problemAt": "Line {{line}}: {{message}}",
+    "unsaved": {
+      "title": "Unsaved edits",
+      "message": "The open file has unsaved changes. Discard them?",
+      "discard": "Discard"
+    },
+    "invalid": {
+      "title": "The file has an error",
+      "message": "The game may fail to read this file: {{message}}. Save anyway?",
+      "saveAnyway": "Save"
+    },
+    "conflict": {
+      "title": "The file changed",
+      "message": "While the file was open, the game or another program rewrote it. Overwrite with your version? The current one goes into history.",
+      "overwrite": "Overwrite"
+    },
+    "history": {
+      "open": "History",
+      "title": "Saved versions",
+      "back": "Back to editor",
+      "empty": "No versions yet. They appear when you save from the launcher.",
+      "diffHint": "Difference between the selected version and what is in the editor now",
+      "restore": "Bring this version back",
+      "restored": "Version loaded into the editor, save to apply it",
+      "identical": "Same as the current content",
+      "tooDifferent": "The versions differ too much to show a diff",
+      "hidden": "… {{count}} unchanged"
+    }
+  },
+  "worldTools": {
+    "open": "Backups and map",
+    "back": "Back to worlds",
+    "loading": "Loading…",
+    "tab": {
+      "backups": "Backups",
+      "map": "Chunk map"
+    },
+    "autoBackup": {
+      "label": "Back up worlds after playing",
+      "hint": "When the game closes, the worlds you entered are archived. The last 4 automatic copies of each world are kept."
+    },
+    "backups": {
+      "create": "Back up now",
+      "creating": "Archiving…",
+      "created": "World backup ready",
+      "openFolder": "Backups folder",
+      "hint": "Before a restore the current state of the world is saved as a separate safety copy.",
+      "runningHint": "The game is running: you can back up, but not restore",
+      "empty": "No backups of this world yet",
+      "restore": "Restore",
+      "restoring": "Restoring…",
+      "restored": "World restored",
+      "restoreTitle": "Restore the world?",
+      "restoreMessage": "The world goes back to its state on {{date}}. The current state is saved as a safety copy first.",
+      "delete": "Delete backup",
+      "deleteTitle": "Delete the backup?",
+      "deleteMessage": "The archive will be deleted for good.",
+      "kind": {
+        "manual": "Manual",
+        "auto": "Auto",
+        "safety": "Safety"
+      }
+    },
+    "map": {
+      "dimension": "Dimension",
+      "dim": {
+        "overworld": "Overworld",
+        "the_nether": "Nether",
+        "the_end": "End"
+      },
+      "filter": {
+        "none": "Map",
+        "unvisited": "Never visited",
+        "outdated": "Outdated",
+        "damaged": "Damaged"
+      },
+      "selectFiltered": "Select highlighted",
+      "selected": "Selected: {{count}}",
+      "clear": "Clear selection",
+      "delete": "Delete chunks",
+      "deleting": "Deleting…",
+      "deleteTitle": "Delete the selected chunks?",
+      "deleteMessage": "Chunks: {{count}}. The game will generate them again on the next visit and anything built there will be gone. The world is saved as a safety copy before deleting.",
+      "deleted": "Chunks deleted: {{count}}",
+      "closeGame": "Close the game to delete chunks",
+      "empty": "No chunks have been generated in this dimension yet",
+      "chunkAt": "Chunk {{x}}, {{z}} · blocks {{bx}}, {{bz}}",
+      "inhabited": "players spent {{minutes}} min here",
+      "status": {
+        "absent": "none",
+        "ok": "fine",
+        "damaged": "damaged",
+        "unreadable": "unreadable",
+        "proto": "not fully generated"
+      },
+      "stats": "Chunks loaded: {{total}} · never visited: {{unvisited}} · outdated: {{outdated}}",
+      "worldVersion": "World version: {{version}}",
+      "controls": "Wheel: zoom · drag: pan · click: select · Shift+drag: select an area"
+    }
+  },
+  "serverPack": {
+    "nav": "Server",
+    "title": "Server pack",
+    "hint": "Set up a server for this instance and build an archive for a host or your own computer. Settings are saved per instance.",
+    "loading": "Loading…",
+    "unsupported": "Server packs are not available for the {{loader}} loader yet.",
+    "core": "Server software",
+    "kind": {
+      "vanilla": "Vanilla",
+      "paper": "Paper",
+      "purpur": "Purpur",
+      "fabric": "Fabric",
+      "forge": "Forge",
+      "neoforge": "NeoForge"
+    },
+    "kindHint": {
+      "vanilla": "The official Mojang server, unchanged.",
+      "paper": "Faster than vanilla and runs Bukkit and Spigot plugins.",
+      "purpur": "Paper with extra gameplay settings.",
+      "fabric": "A server with the same Fabric Loader version as the instance.",
+      "forge": "The archive contains the Forge installer; the start script installs the server on first launch.",
+      "neoforge": "The archive contains the NeoForge installer; the start script installs the server on first launch."
+    },
+    "java": "Requires Java {{version}}.",
+    "memory": "Memory",
+    "memoryValue": "{{gb}} GB",
+    "auth": {
+      "label": "Player login",
+      "microsoft": "Microsoft",
+      "ely": "Ely.by",
+      "offline": "Any name"
+    },
+    "authHint": {
+      "microsoft": "Only licensed Microsoft accounts can join.",
+      "ely": "For Ely.by accounts: authlib-injector is added to the archive and the scripts start the server with it.",
+      "offline": "Any name can join without verification. If the server is reachable from the internet, turn on the whitelist."
+    },
+    "props": {
+      "title": "Server settings",
+      "motd": "Server list description",
+      "port": "Port",
+      "maxPlayers": "Max players",
+      "difficulty": "Difficulty",
+      "gamemode": "Game mode",
+      "viewDistance": "View distance",
+      "simulationDistance": "Simulation distance",
+      "spawnProtection": "Spawn protection (blocks)",
+      "seed": "World seed",
+      "whitelist": "Whitelist",
+      "pvp": "PvP",
+      "allowFlight": "Allow flight",
+      "hardcore": "Hardcore",
+      "commandBlocks": "Command blocks"
+    },
+    "difficulty": {
+      "peaceful": "Peaceful",
+      "easy": "Easy",
+      "normal": "Normal",
+      "hard": "Hard"
+    },
+    "gamemode": {
+      "survival": "Survival",
+      "creative": "Creative",
+      "adventure": "Adventure",
+      "spectator": "Spectator"
+    },
+    "mods": {
+      "title": "Mods",
+      "hint": "Client-only mods are detected automatically and left out of the server. Tick them by hand if detection got it wrong.",
+      "count": "{{included}} of {{total}}",
+      "clientOnly": "Client-only",
+      "loading": "Reading mods…",
+      "empty": "This instance has no mods.",
+      "configs": "Include configs (config, defaultconfigs, kubejs, scripts)"
+    },
+    "eula": {
+      "accept": "I accept the Minecraft End User License Agreement (EULA)",
+      "read": "Read it",
+      "hint": "Without it the server will not start: on first launch it asks you to accept the EULA in eula.txt."
+    },
+    "unsaved": "You have unsaved changes",
+    "buildHint": "The archive holds the core, mods, configs, server.properties and start.bat / start.sh scripts.",
+    "reset": "Discard",
+    "save": "Save",
+    "saved": "Server settings saved",
+    "build": "Build archive",
+    "building": "Building archive…",
+    "built": "Server archive saved. Mods: {{mods}}, skipped: {{skipped}}"
+  },
+  "trayMenu": {
+    "show": "Open launcher",
+    "quit": "Quit",
+    "empty": "Recent and pinned instances will appear here",
+    "launch": "Launch “{{name}}”"
+  },
+  "jumpList": {
+    "category": "Instances",
+    "description": "Launch {{version}}"
+  },
+  "gameMonitor": {
+    "chip": "{{used}} GB · {{cpu}}%",
+    "openDetails": "Game resource details",
+    "title": "Game resources",
+    "memoryLabel": "Process memory",
+    "cpuLabel": "CPU",
+    "systemLabel": "System memory",
+    "systemUsed": "{{used}} of {{total}} GB",
+    "gb": "{{value}} GB",
+    "heapHint": "Java is allocated {{max}} GB. The process usually takes more: besides the heap there is the JVM itself, native libraries and graphics.",
+    "now": "now",
+    "secondsAgo": "{{seconds}} s ago",
+    "openSettings": "Adjust instance memory",
+    "lowMemory": "The system is running low on memory: close other programs or lower the allocated memory"
+  }
+}
